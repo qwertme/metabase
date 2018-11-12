@@ -8,7 +8,6 @@
              [query-processor-test :as qpt :refer [first-row format-rows-by]]]
             [metabase.mbql.normalize :as normalize]
             [metabase.models.database :refer [Database]]
-            [metabase.query-processor.interface :as qp.i]
             [metabase.query-processor.middleware.parameters.sql :as sql]
             [metabase.test
              [data :as data]
@@ -25,7 +24,7 @@
   ([sql]
    (parse-template sql {}))
   ([sql param-key->value]
-   (binding [qp.i/*driver* (driver/engine->driver :h2)]
+   (driver/with-driver :h2
      (#'sql/parse-template sql param-key->value))))
 
 (expect
@@ -110,7 +109,7 @@
 
 (defn- substitute {:style/indent 1} [sql params]
   ;; apparently you can still bind private dynamic vars
-  (binding [qp.i/*driver* (driver/engine->driver :h2)]
+  (driver/with-driver :h2
     ((resolve 'metabase.query-processor.middleware.parameters.sql/expand-query-params)
      {:query sql}
      (into {} (for [[k v] params]
@@ -360,7 +359,7 @@
 
 (defn- expand* [query]
   (qpt/with-h2-db-timezone
-    (-> (sql/expand (assoc (normalize/normalize query) :driver (driver/engine->driver :h2)))
+    (-> (sql/expand (assoc (normalize/normalize query) :driver :h2))
         :native
         (select-keys [:query :params :template-tags]))))
 
@@ -561,9 +560,9 @@
   (let [sql (:query (qp/query->native (data/mbql-query checkins)))]
     (second (re-find #"FROM\s([^\s()]+)" sql))))
 
-;; as with the MBQL parameters tests Redshift and Crate fail for unknown reasons; disable their tests for now
+;; as with the MBQL parameters tests Redshift fail for unknown reasons; disable their tests for now
 (def ^:private ^:const sql-parameters-engines
-  (disj (qpt/non-timeseries-engines-with-feature :native-parameters) :redshift :crate))
+  (disj (qpt/non-timeseries-engines-with-feature :native-parameters) :redshift))
 
 (defn- process-native {:style/indent 0} [& kvs]
   (du/with-effective-timezone (Database (data/id))
@@ -629,17 +628,17 @@
 ;; Test that native dates are parsed with the report timezone (when supported)
 (datasets/expect-with-engines (disj sql-parameters-engines :sqlite)
   [(cond
-     (= :presto datasets/*engine*)
+     (= :presto driver/*driver*)
      "2018-04-18"
 
      ;; Snowflake appears to have a bug in their JDBC driver when including the target timezone along with the SQL
      ;; date parameter. The below value is not correct, but is what the driver returns right now. This bug is written
      ;; up as https://github.com/metabase/metabase/issues/8804 and when fixed this should be removed as it should
      ;; return the same value as the other drivers that support a report timezone
-     (= :snowflake datasets/*engine*)
+     (= :snowflake driver/*driver*)
      "2018-04-16T17:00:00.000-07:00"
 
-     (qpt/supports-report-timezone? datasets/*engine*)
+     (qpt/supports-report-timezone? driver/*driver*)
      "2018-04-18T00:00:00.000-07:00"
 
      :else
@@ -647,7 +646,7 @@
   (tu/with-temporary-setting-values [report-timezone "America/Los_Angeles"]
     (first-row
       (process-native
-        :native     {:query         (case datasets/*engine*
+        :native     {:query         (case driver/*driver*
                                       :bigquery
                                       "SELECT {{date}} as date"
 
@@ -665,7 +664,7 @@
 (expect
   {:replacement-snippet     "\"test-data\".\"PUBLIC\".\"checkins\".\"date\"",
    :prepared-statement-args nil}
-  (binding [qp.i/*driver* (driver/engine->driver :postgres)]
+  (driver/with-driver :postgres
     (#'sql/honeysql->replacement-snippet-info :test-data.PUBLIC.checkins.date)))
 
 ;; Some random end-to-end param expansion tests added as part of the SQL Parameters 2.0 rewrite

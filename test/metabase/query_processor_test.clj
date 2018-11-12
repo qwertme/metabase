@@ -3,35 +3,25 @@
   `metabase.query-processor-test.*` namespaces; there are so many that it is no longer feasible to keep them all in
   this one. Event-based DBs such as Druid are tested in `metabase.driver.event-query-processor-test`."
   (:require [clojure.set :as set]
-            [clojure.tools.logging :as log]
             [medley.core :as m]
             [metabase
              [driver :as driver]
              [util :as u]]
+            [metabase.driver.util :as driver.u]
             [metabase.test.data :as data]
             [metabase.test.data
              [datasets :as datasets]
-             [interface :as di]]
+             [interface :as tx]]
             [metabase.util.date :as du]))
-
-;; make sure all the driver test extension namespaces are loaded <3 if this isn't done some things will get loaded at
-;; the wrong time which can end up causing test databases to be created more than once, which fails
-(doseq [engine (keys (driver/available-drivers))]
-  (let [test-ns (symbol (str "metabase.test.data." (name engine)))]
-    (try
-      (require test-ns)
-      (catch Throwable e
-        (log/warn (format "Error loading %s: %s" test-ns (.getMessage e)))))))
-
 
 ;;; ---------------------------------------------- Helper Fns + Macros -----------------------------------------------
 
 ;; Event-Based DBs aren't tested here, but in `event-query-processor-test` instead.
-(def ^:private ^:const timeseries-engines #{:druid})
+(def ^:private timeseries-engines #{:druid})
 
 (def ^:const non-timeseries-engines
   "Set of engines for non-timeseries DBs (i.e., every driver except `:druid`)."
-  (set/difference datasets/all-valid-engines timeseries-engines))
+  (set/difference datasets/test-drivers timeseries-engines))
 
 (defn non-timeseries-engines-with-feature
   "Set of engines that support a given `feature`. If additional features are given, it will ensure all features are
@@ -39,7 +29,7 @@
   [feature & more-features]
   (let [features (set (cons feature more-features))]
     (set (for [engine non-timeseries-engines
-               :when  (set/subset? features (driver/features (driver/engine->driver engine)))]
+               :when  (set/subset? features (driver.u/features engine))]
            engine))))
 
 (defn non-timeseries-engines-without-feature
@@ -276,7 +266,7 @@
     (aggregate-col :avg (venues-col :id))"
   {:arglists '([ag-type] [ag-type field])}
   [& args]
-  (apply di/aggregate-column-info datasets/*driver* args))
+  (apply tx/aggregate-column-info (tx/driver) args))
 
 (defn breakout-col [col]
   (assoc col :source :breakout))
@@ -352,12 +342,9 @@
   (first (rows results)))
 
 (defn supports-report-timezone?
-  "Returns truthy if `ENGINE` supports setting a timezone"
-  [engine]
-  (-> engine
-      driver/engine->driver
-      driver/features
-      (contains? :set-timezone)))
+  "Returns truthy if `driver` supports setting a timezone"
+  [driver]
+  (driver/supports? driver :set-timezone))
 
 (defmacro with-h2-db-timezone
   "This macro is useful when testing pieces of the query pipeline (such as expand) where it's a basic unit test not

@@ -1,6 +1,7 @@
 (ns metabase.query-processor-test.expressions-test
   "Tests for expressions (calculated columns)."
   (:require [metabase
+             [driver :as driver]
              [query-processor-test :refer :all]
              [util :as u]]
             [metabase.test.data :as data]
@@ -87,7 +88,7 @@
 (datasets/expect-with-engines (non-timeseries-engines-with-feature :expressions)
   (conj #{{:name "x" :base_type :type/Float}}
         {:name      (data/format-name "category_id")
-         :base_type (case datasets/*engine*
+         :base_type (case driver/*driver*
                       :oracle    :type/Decimal
                       :snowflake :type/Number
                       :type/Integer)})

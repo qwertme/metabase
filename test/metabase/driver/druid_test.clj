@@ -8,7 +8,10 @@
              [query-processor :as qp]
              [query-processor-test :refer [rows rows+column-names]]
              [util :as u]]
-            [metabase.driver.druid :as druid]
+            [metabase.db.metadata-queries :as metadata-queries]
+            [metabase.driver
+             [druid :as druid]
+             [util :as driver.u]]
             [metabase.models
              [field :refer [Field]]
              [metric :refer [Metric]]
@@ -29,7 +32,7 @@
    ["100"  "PizzaHacker"                 #inst "2014-07-26T07:00:00.000Z"]
    ["1000" "Tito's Tacos"                #inst "2014-06-03T07:00:00.000Z"]
    ["101"  "Golden Road Brewing"         #inst "2015-09-04T07:00:00.000Z"]]
-  (->> (driver/table-rows-sample (Table (data/id :checkins))
+  (->> (metadata-queries/table-rows-sample (Table (data/id :checkins))
                                  [(Field (data/id :checkins :id))
                                   (Field (data/id :checkins :venue_name))
                                   (Field (data/id :checkins :timestamp))])
@@ -44,7 +47,7 @@
    ["1000" "Tito's Tacos"                #inst "2014-06-03T00:00:00.000-07:00"]
    ["101"  "Golden Road Brewing"         #inst "2015-09-04T00:00:00.000-07:00"]]
   (tu/with-temporary-setting-values [report-timezone "America/Los_Angeles"]
-    (->> (driver/table-rows-sample (Table (data/id :checkins))
+    (->> (metadata-queries/table-rows-sample (Table (data/id :checkins))
                                    [(Field (data/id :checkins :id))
                                     (Field (data/id :checkins :venue_name))
                                     (Field (data/id :checkins :timestamp))])
@@ -59,7 +62,7 @@
    ["1000" "Tito's Tacos"                #inst "2014-06-03T02:00:00.000-05:00"]
    ["101"  "Golden Road Brewing"         #inst "2015-09-04T02:00:00.000-05:00"]]
   (tu/with-jvm-tz (time/time-zone-for-id "America/Chicago")
-    (->> (driver/table-rows-sample (Table (data/id :checkins))
+    (->> (metadata-queries/table-rows-sample (Table (data/id :checkins))
                                    [(Field (data/id :checkins :id))
                                     (Field (data/id :checkins :venue_name))
                                     (Field (data/id :checkins :timestamp))])
@@ -80,7 +83,7 @@
      :metrics     [:count]}))
 
 (defn- process-native-query [query]
-  (datasets/with-engine :druid
+  (driver/with-driver :druid
     (tqpt/with-flattened-dbdef
       (-> (qp/process-query {:native   {:query query}
                              :type     :native
@@ -331,7 +334,7 @@
                       :tunnel-port    22
                       :tunnel-user    "bogus"}]
       (tu.log/suppress-output
-        (driver/can-connect-with-details? engine details :rethrow-exceptions)))
+        (driver.u/can-connect-with-details? engine details :rethrow-exceptions)))
        (catch Exception e
          (.getMessage e))))
 

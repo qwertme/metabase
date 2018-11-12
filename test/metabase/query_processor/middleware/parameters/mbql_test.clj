@@ -2,6 +2,7 @@
   "Tests for *MBQL* parameter substitution."
   (:require [expectations :refer [expect]]
             [metabase
+             [driver :as driver]
              [query-processor :as qp]
              [query-processor-test :refer [first-row format-rows-by non-timeseries-engines rows]]]
             [metabase.mbql.normalize :as normalize]
@@ -134,15 +135,15 @@
 ;;; |                                                END-TO-END TESTS                                                |
 ;;; +----------------------------------------------------------------------------------------------------------------+
 
-;; for some reason param substitution tests fail on Redshift & (occasionally) Crate so just don't run those for now
-(def ^:private params-test-engines (disj non-timeseries-engines :redshift :crate))
+;; for some reason param substitution tests fail on Redshift so just don't run those for now
+(def ^:private params-test-drivers (disj non-timeseries-engines :redshift))
 
 ;; check that date ranges work correctly
-(datasets/expect-with-engines params-test-engines
+(datasets/expect-with-engines params-test-drivers
   [29]
   (do
     ;; Prevent an issue with Snowflake were a previous connection's report-timezone setting can affect this test's results
-    (when (= :snowflake datasets/*engine*) (tu/clear-connection-pool (data/id)))
+    (when (= :snowflake driver/*driver*) (tu/clear-connection-pool (data/id)))
     (first-row
       (format-rows-by [int]
         (qp/process-query {:database   (data/id)
@@ -156,7 +157,7 @@
                                          :value  "2015-04-01~2015-05-01"}]})))))
 
 ;; check that IDs work correctly (passed in as numbers)
-(datasets/expect-with-engines params-test-engines
+(datasets/expect-with-engines params-test-drivers
   [1]
   (first-row
     (format-rows-by [int]
@@ -171,7 +172,7 @@
                                        :value  100}]}))))
 
 ;; check that IDs work correctly (passed in as strings, as the frontend is wont to do; should get converted)
-(datasets/expect-with-engines params-test-engines
+(datasets/expect-with-engines params-test-drivers
   [1]
   (first-row
     (format-rows-by [int]
@@ -186,7 +187,7 @@
                                        :value  "100"}]}))))
 
 ;; test that we can injuect a basic `WHERE id = 9` type param (`id` type)
-(datasets/expect-with-engines params-test-engines
+(datasets/expect-with-engines params-test-drivers
   [[9 "Nils Gotam"]]
   (format-rows-by [int str]
     (let [outer-query (-> (data/mbql-query users)
@@ -197,7 +198,7 @@
       (rows (qp/process-query outer-query)))))
 
 ;; test that we can do the same thing but with a `category` type
-(datasets/expect-with-engines params-test-engines
+(datasets/expect-with-engines params-test-drivers
   [[6]]
   (format-rows-by [int]
     (let [outer-query (-> (data/mbql-query venues
@@ -212,7 +213,7 @@
 ;; Make sure that *multiple* values work. This feature was added in 0.28.0. You are now allowed to pass in an array of
 ;; parameter values instead of a single value, which should stick them together in a single MBQL `:=` clause, which
 ;; ends up generating a SQL `*or*` clause
-(datasets/expect-with-engines params-test-engines
+(datasets/expect-with-engines params-test-drivers
   [[19]]
   (format-rows-by [int]
     (let [outer-query (-> (data/mbql-query venues

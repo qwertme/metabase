@@ -1,10 +1,8 @@
 (ns metabase.api.database-test
   "Tests for /api/database endpoints."
   (:require [expectations :refer :all]
-            [metabase
-             [driver :as driver]
-             [util :as u]]
             [metabase.api.database :as database-api]
+            [metabase.driver.util :as driver.u]
             [metabase.models
              [card :refer [Card]]
              [collection :refer [Collection]]
@@ -25,6 +23,7 @@
              [datasets :as datasets]
              [users :refer :all]]
             [metabase.test.util.log :as tu.log]
+            [metabase.util :as u]
             [toucan.db :as db]
             [toucan.util.test :as tt]))
 
@@ -88,7 +87,7 @@
              :details    $
              :updated_at $
              :timezone   $
-             :features   (map name (driver/features (driver/engine->driver (:engine db))))}))))
+             :features   (map name (driver.u/features (:engine db)))}))))
 
 
 ;; # DB LIFECYCLE ENDPOINTS
@@ -126,7 +125,7 @@
             :details      {:host "localhost", :port 5432, :dbname "fakedb", :user "cam", :ssl true}
             :updated_at   $
             :name         $
-            :features     (driver/features (driver/engine->driver :postgres))}))
+            :features     (driver.u/features :postgres)}))
   (Database (:id db)))
 
 
@@ -184,10 +183,10 @@
 ;; Test that we can get all the DBs (ordered by name)
 ;; Database details *should not* come back for Rasta since she's not a superuser
 (expect-with-temp-db-created-via-api [{db-id :id, db-name :name}]
-  (set (filter some? (conj (for [engine datasets/all-valid-engines]
-                             (datasets/when-testing-engine engine
+  (set (filter some? (conj (for [engine datasets/test-drivers]
+                             (datasets/when-testing-driver engine
                                (merge default-db-details
-                                      (match-$ (data/get-or-create-test-data-db! (driver/engine->driver engine))
+                                      (match-$ (data/get-or-create-test-data-db! engine)
                                         {:created_at         $
                                          :engine             (name $engine)
                                          :id                 $
@@ -195,7 +194,7 @@
                                          :timezone           $
                                          :name               "test-data"
                                          :native_permissions "write"
-                                         :features           (map name (driver/features (driver/engine->driver engine)))}))))
+                                         :features           (map name (driver.u/features engine))}))))
                            (merge default-db-details
                                   (match-$ (Database db-id)
                                     {:created_at         $
@@ -205,7 +204,7 @@
                                      :name               $
                                      :timezone           $
                                      :native_permissions "write"
-                                     :features           (map name (driver/features (driver/engine->driver :postgres)))})))))
+                                     :features           (map name (driver.u/features :postgres))})))))
   (->> ((user->client :rasta) :get 200 "database")
        (filter #(#{"test-data" db-name} (:name %)))
        set))
@@ -224,10 +223,10 @@
                        :timezone           $
                        :native_permissions "write"
                        :tables             []
-                       :features           (map name (driver/features (driver/engine->driver :postgres)))}))
-             (filter identity (for [engine datasets/all-valid-engines]
-                                (datasets/when-testing-engine engine
-                                  (let [database (data/get-or-create-test-data-db! (driver/engine->driver engine))]
+                       :features           (map name (driver.u/features :postgres))}))
+             (filter identity (for [engine datasets/test-drivers]
+                                (datasets/when-testing-driver engine
+                                  (let [database (data/get-or-create-test-data-db! engine)]
                                     (merge default-db-details
                                            (match-$ database
                                              {:created_at         $
@@ -239,7 +238,7 @@
                                               :native_permissions "write"
                                               :tables             (sort-by :name (for [table (db/select Table, :db_id (:id database))]
                                                                                    (table-details table)))
-                                              :features           (map name (driver/features (driver/engine->driver engine)))}))))))))
+                                              :features           (map name (driver.u/features engine))}))))))))
   (->> ((user->client :rasta) :get 200 "database" :include_tables true)
        (filter #(#{"test-data" db-name} (:name %)))
        set))
@@ -277,7 +276,7 @@
             :updated_at $
             :name       "test-data"
             :timezone   $
-            :features   (mapv name (driver/features (driver/engine->driver :h2)))
+            :features   (mapv name (driver.u/features :h2))
             :tables     [(merge default-table-details
                                 (match-$ (Table (data/id :categories))
                                   {:schema       "PUBLIC"
@@ -599,7 +598,7 @@
 ;; and using `with-redefs` to disable it in the few tests where it makes sense, we actually have to use `with-redefs`
 ;; here to simulate its *normal* behavior. :unamused:
 (defn- test-database-connection [engine details]
-  (if (driver/can-connect-with-details? (keyword engine) details)
+  (if (driver.u/can-connect-with-details? (keyword engine) details)
     nil
     {:valid false, :message "Error!"}))
 

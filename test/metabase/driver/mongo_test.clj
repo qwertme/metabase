@@ -7,7 +7,10 @@
              [query-processor :as qp]
              [query-processor-test :refer [rows]]]
             [metabase.automagic-dashboards.core :as magic]
-            [metabase.driver.mongo :as mongo]
+            [metabase.db.metadata-queries :as metadata-queries]
+            [metabase.driver
+             [mongo :as mongo]
+             [util :as driver.u]]
             [metabase.driver.mongo.query-processor :as mongo-qp]
             [metabase.models
              [field :refer [Field]]
@@ -17,8 +20,7 @@
              [datasets :as datasets]
              [interface :as i]]
             [toucan.db :as db])
-  (:import metabase.driver.mongo.MongoDriver
-           org.bson.types.ObjectId
+  (:import org.bson.types.ObjectId
            org.joda.time.DateTime))
 
 ;; ## Constants + Helper Fns/Macros
@@ -34,36 +36,36 @@
 
 (datasets/expect-with-engine :mongo
   false
-  (driver/can-connect-with-details? :mongo {:host   "localhost"
-                                            :port   3000
-                                            :dbname "bad-db-name"}))
+  (driver.u/can-connect-with-details? :mongo {:host   "localhost"
+                                              :port   3000
+                                              :dbname "bad-db-name"}))
 
 (datasets/expect-with-engine :mongo
   false
-  (driver/can-connect-with-details? :mongo {}))
+  (driver.u/can-connect-with-details? :mongo {}))
 
 (datasets/expect-with-engine :mongo
   true
-  (driver/can-connect-with-details? :mongo {:host "localhost"
-                                            :port 27017
-                                            :dbname "metabase-test"}))
+  (driver.u/can-connect-with-details? :mongo {:host "localhost"
+                                              :port 27017
+                                              :dbname "metabase-test"}))
 
 ;; should use default port 27017 if not specified
 (datasets/expect-with-engine :mongo
   true
-  (driver/can-connect-with-details? :mongo {:host "localhost"
-                                            :dbname "metabase-test"}))
+  (driver.u/can-connect-with-details? :mongo {:host "localhost"
+                                              :dbname "metabase-test"}))
 
 (datasets/expect-with-engine :mongo
   false
-  (driver/can-connect-with-details? :mongo {:host "123.4.5.6"
-                                            :dbname "bad-db-name?connectTimeoutMS=50"}))
+  (driver.u/can-connect-with-details? :mongo {:host "123.4.5.6"
+                                              :dbname "bad-db-name?connectTimeoutMS=50"}))
 
 (datasets/expect-with-engine :mongo
   false
-  (driver/can-connect-with-details? :mongo {:host "localhost"
-                                            :port 3000
-                                            :dbname "bad-db-name?connectTimeoutMS=50"}))
+  (driver.u/can-connect-with-details? :mongo {:host "localhost"
+                                              :port 3000
+                                              :dbname "bad-db-name?connectTimeoutMS=50"}))
 
 (def ^:const ^:private native-query
   "[{\"$project\": {\"_id\": \"$_id\"}},
@@ -95,7 +97,7 @@
              {:schema nil, :name "categories"}
              {:schema nil, :name "users"}
              {:schema nil, :name "venues"}}}
-  (driver/describe-database (MongoDriver.) (data/db)))
+  (driver/describe-database :mongo (data/db)))
 
 ;; DESCRIBE-TABLE
 (datasets/expect-with-engine :mongo
@@ -120,7 +122,7 @@
               :database-type "java.lang.Long"
               :base-type     :type/Integer
               :pk?           true}}}
-  (driver/describe-table (MongoDriver.) (data/db) (Table (data/id :venues))))
+  (driver/describe-table :mongo (data/db) (Table (data/id :venues))))
 
 ;; Make sure that all-NULL columns work and are synced correctly (#6875)
 (i/def-database-definition ^:private all-null-columns
@@ -148,11 +150,11 @@
    [3 "The Apple Pan"]
    [4 "Wurstküche"]
    [5 "Brite Spot Family Restaurant"]]
-  (driver/sync-in-context (MongoDriver.) (data/db)
+  (driver/sync-in-context :mongo (data/db)
     (fn []
-      (vec (take 5 (driver/table-rows-sample (Table (data/id :venues))
-                     [(Field (data/id :venues :id))
-                      (Field (data/id :venues :name))]))))))
+      (vec (take 5 (metadata-queries/table-rows-sample (Table (data/id :venues))
+                                                       [(Field (data/id :venues :id))
+                                                        (Field (data/id :venues :name))]))))))
 
 
 ;; ## Big-picture tests for the way data should look post-sync

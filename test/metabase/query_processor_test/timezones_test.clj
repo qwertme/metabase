@@ -1,5 +1,6 @@
 (ns metabase.query-processor-test.timezones-test
   (:require [metabase
+             [driver :as driver]
              [query-processor :as qp]
              [query-processor-test :as qpt]]
             [metabase.test
@@ -7,17 +8,14 @@
              [util :as tu]]
             [metabase.test.data
              [dataset-definitions :as defs]
-             [datasets :refer [*driver* *engine* expect-with-engine expect-with-engines]]
-             [generic-sql :as generic-sql]
-             [interface :as i]]
-            [toucan.db :as db])
-  (:import metabase.driver.mysql.MySQLDriver))
-
-(def ^:private mysql-driver (MySQLDriver.))
+             [datasets :refer [expect-with-engines]]
+             [interface :as i]
+             [sql :as sql.tx]]
+            [toucan.db :as db]))
 
 (defn- call-with-timezones-db [f]
   ;; Does the database exist?
-  (when-not (i/metabase-instance defs/test-data-with-timezones *engine*)
+  (when-not (i/metabase-instance defs/test-data-with-timezones driver/*driver*)
     ;; The database doesn't exist, so we need to create it
     (data/get-or-create-database! defs/test-data-with-timezones))
   ;; The database can now be used in tests
@@ -53,11 +51,11 @@
           set))))
 
 (defn- quote-name [identifier]
-  (generic-sql/quote-name *driver* identifier))
+  (sql.tx/quote-name driver/*driver* identifier))
 
 (defn- users-table-identifier []
   ;; HACK ! I don't have all day to write protocol methods to make this work the "right" way so for BigQuery and
-  (if (= *engine* :bigquery)
+  (if (= driver/*driver* :bigquery)
     "[test_data_with_timezones.users]"
     (let [{table-name :name, schema :schema} (db/select-one ['Table :name :schema], :id (data/id :users))]
       (str (when (seq schema)

@@ -1,6 +1,7 @@
 (ns metabase.api.table-test
   "Tests for /api/table endpoints."
   (:require [clojure.walk :as walk]
+            [metabase.driver.util :as driver.u]
             [expectations :refer :all]
             [medley.core :as m]
             [metabase
@@ -55,7 +56,7 @@
      :description                 nil
      :caveats                     nil
      :points_of_interest          nil
-     :features                    (mapv name (driver/features (driver/engine->driver :h2)))
+     :features                    (mapv name (driver.u/features :h2))
      :cache_field_values_schedule "0 50 0 * * ? *"
      :metadata_sync_schedule      "0 50 * * * ? *"
      :options                     nil

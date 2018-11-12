@@ -2,12 +2,11 @@
   "Tests for handling queries with nested expressions."
   (:require [clojure.string :as str]
             [expectations :refer [expect]]
-            [honeysql.core :as hsql]
             [metabase
+             [driver :as driver]
              [query-processor :as qp]
              [query-processor-test :refer :all]
              [util :as u]]
-            [metabase.driver.generic-sql :as generic-sql]
             [metabase.models
              [card :as card :refer [Card]]
              [collection :as collection :refer [Collection]]
@@ -15,15 +14,13 @@
              [field :refer [Field]]
              [permissions :as perms]
              [permissions-group :as group]
-             [segment :refer [Segment]]
-             [table :refer [Table]]]
+             [segment :refer [Segment]]]
             [metabase.models.query.permissions :as query-perms]
             [metabase.test
              [data :as data]
              [util :as tu]]
             [metabase.test.data
              [dataset-definitions :as defs]
-             [generic-sql :as sql.test]
              [datasets :as datasets]
              [users :refer [create-users-if-needed! user->client]]]
             [toucan.db :as db]
@@ -71,10 +68,10 @@
           [4 -118.465 29 2 "Wurstküche"                   33.9997]
           [5 -118.261 20 2 "Brite Spot Family Restaurant" 34.0778]]
    ;; Oracle doesn't have Integer types, they always come back as DECIMAL
-   :cols [{:name "id",          :base_type (case datasets/*engine* :oracle :type/Decimal :type/Integer)}
+   :cols [{:name "id",          :base_type (case driver/*driver* :oracle :type/Decimal :type/Integer)}
           {:name "longitude",   :base_type :type/Float}
-          {:name "category_id", :base_type (case datasets/*engine* :oracle :type/Decimal :type/Integer)}
-          {:name "price",       :base_type (case datasets/*engine* :oracle :type/Decimal :type/Integer)}
+          {:name "category_id", :base_type (case driver/*driver* :oracle :type/Decimal :type/Integer)}
+          {:name "price",       :base_type (case driver/*driver* :oracle :type/Decimal :type/Integer)}
           {:name "name",        :base_type :type/Text}
           {:name "latitude",    :base_type :type/Float}]}
   (format-rows-by [int (partial u/round-to-decimals 4) int int str (partial u/round-to-decimals 4)]

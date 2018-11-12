@@ -12,7 +12,7 @@
              [driver :as driver]
              [task :as task]
              [util :as u]]
-            [metabase.driver.generic-sql :as sql]
+            [metabase.driver.sql-jdbc.connection :as sql-jdbc.conn]
             [metabase.models
              [card :refer [Card]]
              [collection :as collection :refer [Collection]]
@@ -34,9 +34,7 @@
              [task-history :refer [TaskHistory]]
              [user :refer [User]]]
             [metabase.test.data :as data]
-            [metabase.test.data
-             [dataset-definitions :as defs]
-             [datasets :refer [*driver*]]]
+            [metabase.test.data.dataset-definitions :as defs]
             [metabase.util.date :as du]
             [toucan.db :as db]
             [toucan.util.test :as test])
@@ -514,18 +512,17 @@
   timezone. That causes problems for tests that we can determine the database's timezone. This function will reset the
   connections in the connection pool for `db` to ensure that we get fresh session with no timezone specified"
   [db]
-  (when-let [^PooledDataSource conn-pool (:datasource (sql/db->pooled-connection-spec db))]
+  (when-let [^PooledDataSource conn-pool (:datasource (sql-jdbc.conn/db->pooled-connection-spec db))]
     (.softResetAllUsers conn-pool)))
 
 (defn db-timezone-id
-  "Return the timezone id from the test database. Must be called with `metabase.test.data.datasets/*driver*` bound,
-  such as via `metabase.test.data.datasets/with-engine`"
+  "Return the timezone id from the test database. Must be called with `*driver*` bound,such as via `driver/with-driver`"
   []
-  (assert (bound? #'*driver*))
+  (assert driver/*driver*)
   (let [db (data/db)]
     (clear-connection-pool db)
     (data/dataset test-data
-      (-> (driver/current-db-time *driver* db)
+      (-> (driver/current-db-time driver/*driver* db)
           .getChronology
           .getZone
           .getID))))
@@ -541,7 +538,7 @@
       ;; It looks like some DB drivers cache the timezone information
       ;; when instantiated, this clears those to force them to reread
       ;; that timezone value
-      (reset! @#'metabase.driver.generic-sql/database-id->connection-pool {})
+      (reset! @#'sql-jdbc.conn/database-id->connection-pool {})
       ;; Used by JDBC, and most JVM things
       (TimeZone/setDefault (.toTimeZone dtz))
       ;; Needed as Joda time has a different default TZ

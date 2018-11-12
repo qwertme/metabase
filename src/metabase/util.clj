@@ -324,7 +324,7 @@
   {:pre [(integer? decimal-place) (number? number)]}
   (double (.setScale (bigdec number) decimal-place BigDecimal/ROUND_HALF_UP)))
 
-(defn drop-first-arg
+(defn ^:deprecated drop-first-arg
   "Returns a new fn that drops its first arg and applies the rest to the original.
    Useful for creating `extend` method maps when you don't care about the `this` param. :flushed:
 
@@ -440,6 +440,8 @@
   (when k
     (s/replace (str k) #"^:" "")))
 
+;; TODO - now that I think about this, I think this should be called `the-id` instead, because the idea is similar to
+;; `clojure.core/the-ns`
 (defn get-id
   "Return the value of `:id` if OBJECT-OR-ID is a map, or otherwise return OBJECT-OR-ID as-is if it is an integer.
    This is guaranteed to return an integer ID; it will throw an Exception if it cannot find one.

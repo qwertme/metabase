@@ -1,11 +1,14 @@
 (ns metabase.query-processor-test.order-by-test
   "Tests for the `:order-by` clause."
   (:require [clojure.math.numeric-tower :as math]
+            [metabase
+             [driver :as driver]
+             [query-processor-test :refer :all]]
             [metabase.models.field :refer [Field]]
-            [metabase.query-processor-test :refer :all]
-            [metabase.test.data :as data]
-            [metabase.test.data.datasets :as datasets :refer [*engine*]]
-            [metabase.test.util :as tu]))
+            [metabase.test
+             [data :as data]
+             [util :as tu]]
+            [metabase.test.data.datasets :as datasets]))
 
 (expect-with-non-timeseries-dbs
   [[1 12 375]
@@ -115,10 +118,10 @@
 (datasets/expect-with-engines (non-timeseries-engines-with-feature :standard-deviation-aggregations)
   {:columns     [(data/format-name "price")
                  "stddev"]
-   :rows        [[3 (if (#{:mysql :crate} *engine*) 25 26)]
+   :rows        [[3 (if (= :crate driver/*driver*) 25 26)]
                  [1 24]
                  [2 21]
-                 [4 (if (#{:mysql :crate} *engine*) 14 15)]]
+                 [4 (if (= :crate driver/*driver*) 14 15)]]
    :cols        [(breakout-col (venues-col :price))
                  (aggregate-col :stddev (venues-col :category_id))]
    :native_form true}

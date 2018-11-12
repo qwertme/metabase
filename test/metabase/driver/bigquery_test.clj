@@ -7,14 +7,13 @@
              [query-processor :as qp]
              [query-processor-test :as qptest]
              [util :as u]]
+            [metabase.db.metadata-queries :as metadata-queries]
             [metabase.driver.bigquery :as bigquery]
             [metabase.mbql.util :as mbql.u]
             [metabase.models
              [database :refer [Database]]
              [field :refer [Field]]
              [table :refer [Table]]]
-            [metabase.query-processor.interface :as qpi]
-            [metabase.query-processor.middleware.check-features :as check-features]
             [metabase.test
              [data :as data]
              [util :as tu]]
@@ -41,7 +40,7 @@
    [3 "The Apple Pan"]
    [4 "Wurstküche"]
    [5 "Brite Spot Family Restaurant"]]
-  (->> (driver/table-rows-sample (Table (data/id :venues))
+  (->> (metadata-queries/table-rows-sample (Table (data/id :venues))
          [(Field (data/id :venues :id))
           (Field (data/id :venues :name))])
        (sort-by first)
@@ -83,8 +82,8 @@
     [:named _ ag-name] ag-name))
 
 (defn- pre-alias-aggregations [outer-query]
-  (binding [qpi/*driver* (driver/engine->driver :bigquery)]
-    (aggregation-names (#'bigquery/pre-alias-aggregations outer-query))))
+  (binding [driver/*driver* :bigquery]
+    (aggregation-names (#'bigquery/pre-alias-aggregations :bigquery outer-query))))
 
 (defn- query-with-aggregations
   [aggregations]
@@ -119,8 +118,8 @@
 ;; if query has no aggregations then pre-alias-aggregations should do nothing
 (expect
   {}
-  (binding [qpi/*driver* (driver/engine->driver :bigquery)]
-    (#'bigquery/pre-alias-aggregations {})))
+  (driver/with-driver :bigquery
+    (#'bigquery/pre-alias-aggregations :bigquery {})))
 
 
 (expect-with-engine :bigquery
@@ -160,8 +159,7 @@
        "ORDER BY `name` ASC")
   ;; normally for test purposes BigQuery doesn't support foreign keys so override the function that checks that and
   ;; make it return `true` so this test proceeds as expected
-  (with-redefs [driver/driver-supports?         (constantly true)
-                check-features/driver-supports? (constantly true)]
+  (with-redefs [driver/supports?                (constantly true)]
     (tu/with-temp-vals-in-db 'Field (data/id :venues :category_id) {:fk_target_field_id (data/id :categories :id)
                                                                     :special_type       "type/FK"}
       (let [results (qp/process-query
@@ -219,9 +217,9 @@
 
 ;; if I run a BigQuery query, does it get a remark added to it?
 (defn- query->native [query]
-  (with-local-vars [native-query nil]
+  (let [native-query (atom nil)]
     (with-redefs [bigquery/process-native* (fn [_ sql]
-                                             (var-set native-query sql)
+                                             (reset! native-query sql)
                                              (throw (Exception. "Done.")))]
       (qp/process-query {:database (data/id)
                          :type     :query

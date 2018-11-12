@@ -1,6 +1,6 @@
 (ns metabase.driver.snowflake-test
   (:require [clojure.set :as set]
-            [metabase.driver.snowflake :as snowflake]
+            [metabase.driver :as driver]
             [metabase.models.table :refer [Table]]
             [metabase.test
              [data :as data]
@@ -18,7 +18,7 @@
      {:name "venues",     :schema "PUBLIC", :description nil}
      {:name "checkins",   :schema "PUBLIC", :description nil}
      {:name "categories", :schema "PUBLIC", :description nil}}}
-  (#'snowflake/describe-database (snowflake/->SnowflakeDriver) (assoc (data/db) :name "ABC")))
+  (driver/describe-database :snowflake (assoc (data/db) :name "ABC")))
 
 ;; make sure describe-table uses the NAME FROM DETAILS too
 (expect-with-engine :snowflake
@@ -29,14 +29,14 @@
               :base-type     :type/Number
               :pk?           true}
              {:name "name", :database-type "VARCHAR", :base-type :type/Text}}}
-  (#'snowflake/describe-table (snowflake/->SnowflakeDriver) (assoc (data/db) :name "ABC") (Table (data/id :categories))))
+  (driver/describe-database :snowflake (assoc (data/db) :name "ABC") (Table (data/id :categories))))
 
 ;; make sure describe-table-fks uses the NAME FROM DETAILS too
 (expect-with-engine :snowflake
   #{{:fk-column-name   "category_id"
      :dest-table       {:name "categories", :schema "PUBLIC"}
      :dest-column-name "id"}}
-  (#'snowflake/describe-table-fks (snowflake/->SnowflakeDriver) (assoc (data/db) :name "ABC") (Table (data/id :venues))))
+  (driver/describe-table-fks :snowflake (assoc (data/db) :name "ABC") (Table (data/id :venues))))
 
 ;; describe-database (etc) should accept either `:db` or `:dbname` in the details, working around a bug with the
 ;; original Snowflake impl
@@ -46,10 +46,10 @@
      {:name "venues",     :schema "PUBLIC", :description nil}
      {:name "checkins",   :schema "PUBLIC", :description nil}
      {:name "categories", :schema "PUBLIC", :description nil}}}
-  (#'snowflake/describe-database (snowflake/->SnowflakeDriver) (update (data/db) :details set/rename-keys {:db :dbname})))
+  (driver/describe-database :snowflake (update (data/db) :details set/rename-keys {:db :dbname})))
 
 ;; if details have neither `:db` nor `:dbname`, they should throw an Exception
 
 (expect-with-engine :snowflake
   Exception
-  (#'snowflake/describe-database (snowflake/->SnowflakeDriver) (update (data/db) :details set/rename-keys {:db :xyz})))
+  (driver/describe-database :snowflake (update (data/db) :details set/rename-keys {:db :xyz})))

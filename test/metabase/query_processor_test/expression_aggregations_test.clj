@@ -7,7 +7,7 @@
              [util :as u]]
             [metabase.models.metric :refer [Metric]]
             [metabase.test.data :as data]
-            [metabase.test.data.datasets :as datasets :refer [*driver* *engine*]]
+            [metabase.test.data.datasets :as datasets]
             [toucan.util.test :as tt]))
 
 ;; sum, *
@@ -45,7 +45,7 @@
 
 ;; avg, -
 (datasets/expect-with-engines (non-timeseries-engines-with-feature :expression-aggregations)
-  (if (= *engine* :h2)
+  (if (= driver/*driver* :h2)
     [[1  55]
      [2  97]
      [3 142]
@@ -109,7 +109,7 @@
 
 ;; post-aggregation math w/ avg: count + avg
 (datasets/expect-with-engines (non-timeseries-engines-with-feature :expression-aggregations)
-  (if (= *engine* :h2)
+  (if (= driver/*driver* :h2)
     [[1  77]
      [2 107]
      [3  60]
@@ -172,7 +172,7 @@
              [3  52]
              [4  30]]
    :columns [(data/format-name "price")
-             (driver/format-custom-field-name *driver* "New Price")]} ; Redshift annoyingly always lowercases column aliases
+             (driver/format-custom-field-name driver/*driver* "New Price")]} ; Redshift annoyingly always lowercases column aliases
     (format-rows-by [int int]
       (rows+column-names (data/run-mbql-query venues
                            {:aggregation [[:named [:sum [:+ $price 1]] "New Price"]]
@@ -185,7 +185,7 @@
              [3  -2]
              [4 -17]]
    :columns [(data/format-name "price")
-             (driver/format-custom-field-name *driver* "Sum-41")]}
+             (driver/format-custom-field-name driver/*driver* "Sum-41")]}
   (format-rows-by [int int]
     (rows+column-names (data/run-mbql-query venues
                          {:aggregation [[:named [:- [:sum $price] 41] "Sum-41"]]
@@ -210,7 +210,7 @@
              [3  39]
              [4  24]]
    :columns [(data/format-name "price")
-             (driver/format-custom-field-name *driver* "My Cool Metric")]}
+             (driver/format-custom-field-name driver/*driver* "My Cool Metric")]}
   (tt/with-temp Metric [metric {:table_id   (data/id :venues)
                                 :definition {:aggregation [:sum [:field-id (data/id :venues :price)]]
                                              :filter      [:> [:field-id (data/id :venues :price)] 1]}}]
@@ -225,7 +225,7 @@
              [3  39]
              [4  24]]
    :columns [(data/format-name "price")
-             (driver/format-custom-field-name *driver* "My Cool Metric")]}
+             (driver/format-custom-field-name driver/*driver* "My Cool Metric")]}
   (tt/with-temp Metric [metric {:table_id   (data/id :venues)
                                 :definition {:aggregation [[:sum [:field-id (data/id :venues :price)]]]
                                              :filter      [:> [:field-id (data/id :venues :price)] 1]}}]
@@ -239,7 +239,7 @@
 
 ;; check that named aggregations come back with the correct column metadata (#4002)
 (datasets/expect-with-engines (non-timeseries-engines-with-feature :expression-aggregations)
-  (let [col-name (driver/format-custom-field-name *driver* "Count of Things")]
+  (let [col-name (driver/format-custom-field-name driver/*driver* "Count of Things")]
     (assoc (aggregate-col :count)
       :name         col-name
       :display_name col-name))
