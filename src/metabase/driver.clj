@@ -54,18 +54,23 @@
 (defn abstract?
   "Is `driver` an abstract \"base class\"?"
   [driver]
-  (not (isa? hierarchy driver ::concrete)))
+  (not (isa? hierarchy driver ::concrete?)))
 
 (defn- driver->expected-namespace [driver]
   (symbol
    (or (namespace driver)
        (str "metabase.driver." (name driver)))))
 
+(def ^:private require-lock (Object.))
+
 (defn- require-driver-ns [driver & require-options]
   (let [expected-ns (driver->expected-namespace driver)]
-    (log/debug (trs "Loading driver {0} {1}"
-                    (u/format-color 'blue driver) (apply list 'require expected-ns require-options)))
-    (apply require expected-ns require-options)))
+    ;; acquire an exclusive lock FOR THIS THREAD to make sure no other threads simultaneously call `require` when
+    ;; loading drivers; e.g. if multiple queries are launched at once requiring different drivers.
+    (locking require-lock
+      (log/debug (trs "Loading driver {0} {1}"
+                      (u/format-color 'blue driver) (apply list 'require expected-ns require-options)))
+      (apply require expected-ns require-options))))
 
 (defn- load-driver-namespace-if-needed
   "Load the expected namespace for a `driver` if it has not already been registed. This only works for core Metabase
@@ -88,9 +93,9 @@
 
 (defn the-driver
   "Like Clojure core `the-ns`. Loads and registers `driver` if not already done, throwing an Exception if it fails or is
-  invalid; returns `driver` as-is.
+  invalid; returns keyword `driver`.
 
-  This is useful for two cases:
+  This is useful for three cases:
 
     ;; Ensuring a driver is loaded & registered
     (isa? driver/hierarchy (the-driver :postgres) (the-driver :sql-jdbc)
@@ -99,12 +104,14 @@
     (db/insert! Database :engine (name (the-driver driver)))
 
     (the-driver :postgres) ; -> :postgres
-    (the-driver :baby)     ; -> Exception"
+    (the-driver :baby)     ; -> Exception
+
+    ;; Ensuring driver is a keyword (e.g., when accepting input in an API endpoint)
+   (the-driver \"postgres\") -> :postgres"
   [driver]
-  (when-not (keyword? driver)
-    (throw (Exception. (str (tru "Invalid driver name: {0}" driver)))))
-  (load-driver-namespace-if-needed driver)
-  driver)
+  (let [driver (keyword driver)]
+    (load-driver-namespace-if-needed driver)
+    driver))
 
 (defn- check-abstractness-hasnt-changed
   "Check to make sure we're not trying to change the abstractness of an already registered driver"
@@ -143,16 +150,16 @@
 
   Note that because concreteness is implemented as part of our keyword hierarchy it is not currently possible to
   create an abstract driver with a concrete driver as its parent, since it would still ultimately derive from
-  `::concrete`."
+  `::concrete?`."
   [driver & {:keys [parent abstract?]}]
   {:pre [(keyword? driver)]}
   ;; validate that the registration isn't stomping on things
   (check-abstractness-hasnt-changed driver abstract?)
-  ;; ok, if that was successful we can derive the driver from `::driver`/`::concrete` and parent(s)
+  ;; ok, if that was successful we can derive the driver from `::driver`/`::concrete?` and parent(s)
   (let [derive! (partial alter-var-root #'hierarchy derive driver)]
     (derive! ::driver)
     (when-not abstract?
-      (derive! ::concrete))
+      (derive! ::concrete?))
     (doseq [parent (cond
                      (coll? parent) parent
                      parent         [parent])
@@ -160,34 +167,129 @@
       (load-driver-namespace-if-needed parent)
       (derive! parent)))
   ;; ok, log our great success
-  (when-not (metabase.driver/abstract? driver)
+  (when-not (or *compile-files* (metabase.driver/abstract? driver))
     (log/info (trs "Registered driver {0} {1}" (u/format-color 'blue driver) (u/emoji "🚚")))))
 
 (defn dispatch-on-driver
   "Dispatch function to use for driver multimethods. Dispatches on first arg, a driver keyword; loads that driver's
   namespace if not already done."
-  [x & _]
-  (the-driver x))
+  [driver & _]
+  (the-driver driver))
+
+(defn parent-drivers
+  "Return direct  parents of `driver`, ignoring  special keywords in  the hierarchy like `::concrete`,  `::abstract`, or
+  `::driver`."
+  [driver]
+  (set (for [parent (parents hierarchy :sqlite)
+             :when  (isa? hierarchy ::driver parent)]
+         parent)))
+
+
+;;; +----------------------------------------------------------------------------------------------------------------+
+;;; |                                                 Initialization                                                 |
+;;; +----------------------------------------------------------------------------------------------------------------+
+
+(defmulti initialize!
+  "Perform one-time initialization for a driver before performing sync operations or running queries. This is intended
+  primarily to let drivers defer loading of what are often large external dependencies until needed (i.e. to avoid
+  consuming tons of memory when the driver may not be used at all). For example, several SQL-JDBC drivers use this
+  method to load the JDBC driver dependencies themselves. The default implementation is a no-op.
+
+  This method is guaranteed to only be called once for any given driver. This is done automatically during dispatch
+  for multimethods that use `dispatch-on-initialized-driver`.
+
+  DO NOT CALL THIS METHOD YOURSELF UNDER ANY CIRCUMSTANCES. It is both unneccesary and liable to break things since it
+  will not properly record the fact that the driver was initialized."
+  {:arglists '([driver])}
+  dispatch-on-driver
+  :hierarchy #'hierarchy)
+
+(defmethod initialize! ::driver [_] nil)
+
+(defn- initialized?
+  "Has `driver` been initialized?"
+  [driver]
+  (isa? hierarchy driver ::initialized?))
+
+(defn- initialization-failed?
+  "Was initialization for `driver` attempted, and, if so, did it fail?"
+  [driver]
+  (isa? hierarchy driver ::initialization-failed?))
+
+(def ^:private initialization-lock (Object.))
+
+(defn- initialize-if-needed!
+  "`initialize!` `driver` if not already attempted. Do not call this function directly; use `the-initialized-driver` to
+  guarantee an initialized driver or `dispatch-on-initialized-driver` to guarantee dispatch on one."
+  [driver]
+  ;; if the driver is not yet initialized...
+  (when-not (initialized? driver)
+    ;; acquire the initialization lock, exclusive for THIS THREAD. That way other threads do not attempt to initialze
+    ;; drivers simultaneously
+    (locking initialization-lock
+      ;; check one more time to see if the driver was initialized by another thread while waiting for the lock
+      (when-not (initialized? driver)
+        ;; ok, go ahead and mark this driver as initialized so no one else tries to do it
+        (alter-var-root #'hierarchy derive driver ::initialized?)
+        ;; next, let's make sure our parents are initialized (if needed)
+        (doseq [parent (parent-drivers driver)]
+          (initialize-if-needed! driver))
+        ;; ok, now we can initialize this driver
+        (log/info (trs "Initializing {0} driver..." driver))
+        (try
+          (du/profile (trs "Initialize {0} driver" driver)
+            (initialize! driver))
+          ;; if initialization failed, mark this driver as `::initialization-failed?`; we'll check that and mark this
+          ;; driver as unavailable in the default impl
+          (catch Throwable e
+            (log/error e (trs "Failed to initialize {0} driver." driver))
+            (alter-var-root #'hierarchy derive driver ::initialization-failed?)))))))
+
+(defn the-initialized-driver
+  "Similar to `the-driver`, but initializes `driver` if not already done.
+
+  Please take care not to over-use this function; initializing a driver is intended to be the final step where we do
+  all the expensive things we were deferring as long as possible."
+  [driver]
+  (let [driver (the-driver driver)]
+    (initialize-if-needed! driver)
+    driver))
+
+(defn dispatch-on-initialized-driver
+  "Dispatch function for driver multimethods. Like `dispatch-on-driver`, but initializes a driver first if not already
+  done. This dispatch function should only be used for sync and query-exection methods, so as to avoid initializing
+  drivers for trivial operations like returning a list of connection properties."
+  [driver & x]
+  (the-initialized-driver driver))
 
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                       Interface (Multimethod Defintions)                                       |
 ;;; +----------------------------------------------------------------------------------------------------------------+
 
+;; The following methods are basic info about the driver themselves, and thus can be ran before the driver is fully
+;; initialized.
+
 (defmulti available?
   "Is this driver available for use? (i.e. should we show it as an option when adding a new database?) This is `true` by
-  default for all non-abstract driver types and false for abstract ones; some drivers might want to override this to
-  return false even if the driver isn't abstract -- for example, the Oracle driver might return false if the JDBC
-  driver it depends on is not available.
+  default for all non-abstract driver types whose initialization was successful (if applicable) and `false` for
+  abstract ones; some drivers might want to override this to return false even if the driver isn't abstract -- for
+  example, the Oracle driver might return false if the JDBC driver it depends on is not available.
+
+  For drivers that load additional dependencies during initialization, this method should simply check whether those
+  resources are present; their implementation of `initialize!` should throw an Exception if the driver could not be
+  initialized successfully. The default implementation of this method will return `false` for drivers that have failed
+  initialization.
 
   This method is also used in tests to determine whether the standard set of Query Processor tests should
-  automatically against it; for one-off test drivers to test specific functionality, you should return `false`."
+  automatically run against it; for one-off test drivers to test specific functionality, you should return `false`."
   {:arglists '([driver])}
   dispatch-on-driver
   :hierarchy #'hierarchy)
 
 (defmethod available? ::driver [driver]
-  (isa? hierarchy driver ::concrete))
+  (and (isa? hierarchy driver ::concrete?)
+       (not (initialization-failed? driver))))
 
 
 (defmulti display-name
@@ -201,14 +303,7 @@
   (str/capitalize (name driver)))
 
 
-(defmulti can-connect?
-  "Check whether we can connect to a `Database` with DETAILS-MAP and perform a simple query. For example, a SQL
-  database might try running a query like `SELECT 1;`. This function should return `true` or `false`."
-  {:arglists '([driver details])}
-  dispatch-on-driver
-  :hierarchy #'hierarchy)
-
-
+;; TODO - this is actually SQL-specific so move into `metabase.driver.sql`
 (defmulti date-interval
   "Return an driver-appropriate representation of a moment relative to the current moment in time. By default, this
   returns an `Timestamp` by calling `metabase.util.date/relative-date`; but when possible drivers should return a
@@ -222,36 +317,6 @@
 
 (defmethod date-interval ::driver [_ unit amount]
   (du/relative-date unit amount))
-
-
-(defmulti describe-database
-  "Return a map containing information that describes all of the tables in a `database`, an instance of the `Database`
-  model. It is expected that this function will be peformant and avoid draining meaningful resources of the database.
-  Results should match the `DatabaseMetadata` schema."
-  {:arglists '([driver database])}
-  dispatch-on-driver
-  :hierarchy #'hierarchy)
-
-
-(defmulti describe-table
-  "Return a map containing information that describes the physical schema of `table` (i.e. the fields contained
-  therein). `database` will be an instance of the `Database` model; and `table` an instance of the `Table` model. It is
-  expected that this function will be peformant and avoid draining meaningful resources of the database. Results
-  should match the `TableMetadata` schema."
-  {:arglists '([driver database table])}
-  dispatch-on-driver
-  :hierarchy #'hierarchy)
-
-
-(defmulti describe-table-fks
-  "Return information about the foreign keys in a `table`. Required for drivers that support `:foreign-keys`. Results
-  should match the `FKMetadata` schema."
-  {:arglists '([this database table])}
-  dispatch-on-driver
-  :hierarchy #'hierarchy)
-
-(defmethod describe-table-fks ::driver [_ _ _]
-  nil)
 
 
 (def ConnectionDetailsProperty
@@ -292,23 +357,6 @@
   There are several definitions for common properties available in the `metabase.driver.common` namespace, such as
   `default-host-details` and `default-port-details`. Prefer using these if possible."
   {:arglists '([driver])}
-  dispatch-on-driver
-  :hierarchy #'hierarchy)
-
-
-(defmulti execute-query
-  "Execute a *native* query against the database and return the results.
-
-  The query passed in will conform to the schema in `metabase.mbql.schema/Query`. MBQL queries are transformed to
-  native queries via the `mbql->native` QP middleware, which in turn calls this driver's implementation of
-  `mbql->native` before reaching this method.
-
-  Results should look like:
-
-    {:columns [\"id\", \"name\"]
-     :rows    [[1 \"Lucky Bird\"]
-               [2 \"Rasta Can\"]]}"
-  {:arglists '([driver query]), :style/indent 1}
   dispatch-on-driver
   :hierarchy #'hierarchy)
 
@@ -403,6 +451,64 @@
   message)
 
 
+;; All methods below dispatch on an *initialized* driver, meaning the driver will be initialized if not already done
+;; so before calling their implementations
+
+(defmulti can-connect?
+  "Check whether we can connect to a `Database` with DETAILS-MAP and perform a simple query. For example, a SQL
+  database might try running a query like `SELECT 1;`. This function should return `true` or `false`."
+  {:arglists '([driver details])}
+  dispatch-on-initialized-driver
+  :hierarchy #'hierarchy)
+
+
+(defmulti describe-database
+  "Return a map containing information that describes all of the tables in a `database`, an instance of the `Database`
+  model. It is expected that this function will be peformant and avoid draining meaningful resources of the database.
+  Results should match the `DatabaseMetadata` schema."
+  {:arglists '([driver database])}
+  dispatch-on-initialized-driver
+  :hierarchy #'hierarchy)
+
+
+(defmulti describe-table
+  "Return a map containing information that describes the physical schema of `table` (i.e. the fields contained
+  therein). `database` will be an instance of the `Database` model; and `table` an instance of the `Table` model. It is
+  expected that this function will be peformant and avoid draining meaningful resources of the database. Results
+  should match the `TableMetadata` schema."
+  {:arglists '([driver database table])}
+  dispatch-on-initialized-driver
+  :hierarchy #'hierarchy)
+
+
+(defmulti describe-table-fks
+  "Return information about the foreign keys in a `table`. Required for drivers that support `:foreign-keys`. Results
+  should match the `FKMetadata` schema."
+  {:arglists '([this database table])}
+  dispatch-on-initialized-driver
+  :hierarchy #'hierarchy)
+
+(defmethod describe-table-fks ::driver [_ _ _]
+  nil)
+
+
+(defmulti execute-query
+  "Execute a *native* query against the database and return the results.
+
+  The query passed in will conform to the schema in `metabase.mbql.schema/Query`. MBQL queries are transformed to
+  native queries via the `mbql->native` QP middleware, which in turn calls this driver's implementation of
+  `mbql->native` before reaching this method.
+
+  Results should look like:
+
+    {:columns [\"id\", \"name\"]
+     :rows    [[1 \"Lucky Bird\"]
+               [2 \"Rasta Can\"]]}"
+  {:arglists '([driver query]), :style/indent 1}
+  dispatch-on-initialized-driver
+  :hierarchy #'hierarchy)
+
+
 (defmulti mbql->native
   "Transpile an MBQL query into the appropriate native query form. `query` will match the schema for an MBQL query in
   `metabase.mbql.schema/Query`; this function should return a native query that conforms to that schema.
@@ -418,7 +524,7 @@
     {:query \"-- Metabase card: 10 user: 5
               SELECT * FROM my_table\"}"
   {:arglists '([driver query])}
-  dispatch-on-driver
+  dispatch-on-initialized-driver
   :hierarchy #'hierarchy)
 
 
@@ -427,7 +533,7 @@
   the driver was doing some caching or connection pooling; the driver should release related resources when this is
   called."
   {:arglists '([driver database])}
-  dispatch-on-driver
+  dispatch-on-initialized-driver
   :hierarchy #'hierarchy)
 
 (defmethod notify-database-updated ::driver [_ _]
@@ -442,7 +548,7 @@
       (with-connection [_ database]
         (f)))"
   {:arglists '([driver database f]), :style/indent 2}
-  dispatch-on-driver
+  dispatch-on-initialized-driver
   :hierarchy #'hierarchy)
 
 (defmethod sync-in-context ::driver [_ _ f] (f))
@@ -458,7 +564,7 @@
          (fn [query]
            (qp query)))"
   {:arglists '([driver qp])}
-  dispatch-on-driver
+  dispatch-on-initialized-driver
   :hierarchy #'hierarchy)
 
 (defmethod process-query-in-context ::driver [_ qp] qp)
@@ -473,14 +579,15 @@
   This method is currently only used by the H2 driver to load the Sample Dataset, so it is not neccesary for any other
   drivers to implement it at this time."
   {:arglists '([driver database table])}
-  dispatch-on-driver
+  dispatch-on-initialized-driver
   :hierarchy #'hierarchy)
+
 
 (defmulti current-db-time
   "Return the current time and timezone from the perspective of `database`. You can use
   `metabase.driver.common/current-db-time` to implement this."
   {:arglists '([driver database])}
-  dispatch-on-driver
+  dispatch-on-initialized-driver
   :hierarchy #'hierarchy)
 
 (defmethod current-db-time ::driver [_ _] nil)

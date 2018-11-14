@@ -10,6 +10,7 @@
             [metabase.driver.sql-jdbc
              [connection :as sql-jdbc.conn]
              [execute :as sql-jdbc.execute]
+             [initialize-dependencies :as init-deps]
              [sync :as sql-jdbc.sync]]
             [metabase.driver.sql.query-processor :as sql.qp]
             [metabase.util
@@ -24,6 +25,9 @@
 ;;; +----------------------------------------------------------------------------------------------------------------+
 
 (defmethod driver/display-name :redshift [_] "Amazon Redshift")
+
+(defmethod driver/initialize! :redshift [_]
+  (init-deps/initialize-dependencies! :redshift, :assert-class "com.amazon.redshift.jdbc.Driver"))
 
 ;; The Postgres JDBC .getImportedKeys method doesn't work for Redshift, and we're not allowed to access
 ;; information_schema.constraint_column_usage, so we'll have to use this custom query instead
@@ -104,10 +108,10 @@
 ;;; +----------------------------------------------------------------------------------------------------------------+
 
 (defmethod sql-jdbc.conn/connection-details->spec :redshift [_ {:keys [host port db], :as opts}]
-  (merge {:classname "com.amazon.redshift.jdbc.Driver" ; must be in classpath
+  (merge {:classname   "com.amazon.redshift.jdbc.Driver"
           :subprotocol "redshift"
-          :subname (str "//" host ":" port "/" db "?OpenSourceSubProtocolOverride=false")
-          :ssl true}
+          :subname     (str "//" host ":" port "/" db "?OpenSourceSubProtocolOverride=false")
+          :ssl         true}
          (dissoc opts :host :port :db)))
 
 ;; HACK ! When we test against Redshift we use a session-unique schema so we can run simultaneous tests

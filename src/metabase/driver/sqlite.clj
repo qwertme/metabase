@@ -14,6 +14,7 @@
              [sql :as sql]]
             [metabase.driver.sql-jdbc
              [connection :as sql-jdbc.conn]
+             [initialize-dependencies :as init-deps]
              [sync :as sql-jdbc.sync]]
             [metabase.driver.sql.query-processor :as sql.qp]
             [metabase.util
@@ -26,6 +27,9 @@
 (driver/register! :sqlite, :parent :sql-jdbc)
 
 (defmethod driver/display-name :sqlite [_] "SQLite")
+
+(defmethod driver/initialize! :sqlite [_]
+  (init-deps/initialize-dependencies! :sqlite, :assert-class "org.sqlite.JDBC", :assert-subprotocol "sqlite:"))
 
 (defmethod sql-jdbc.conn/connection-details->spec :sqlite [_ {:keys [db]
                                                               :or   {db "sqlite.db"}

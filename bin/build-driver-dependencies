@@ -1,0 +1,28 @@
+#! /bin/bash
+
+set -eu
+
+project_dir=`pwd`
+driver_deps_dir="$project_dir/driver-dependencies"
+
+build-deps () {
+    driver="$1"
+    dir="$driver_deps_dir/$driver"
+    uberjar="metabase.dependencies.$driver.jar"
+    cd "$dir"
+    echo "Building driver deps for $driver..."
+    lein uberjar
+    cd "$project_dir"
+    echo "copy $dir/target/uberjar/$uberjar -> $project_dir/resources/$uberjar"
+    cp "$dir/target/uberjar/$uberjar" "$project_dir/resources/$uberjar"
+}
+
+if [ "$1" ]; then
+    for driver in "$@"; do
+        build-deps "$driver"
+    done
+else
+    for driver in `ls $driver_deps_dir`; do
+        build-deps "$driver"
+    done
+fi

@@ -41,8 +41,6 @@
                  [clojurewerkz/quartzite "2.0.0"                      ; scheduling library
                   :exclusions [c3p0]]
                  [colorize "0.1.1" :exclusions [org.clojure/clojure]] ; string output with ANSI color codes (for logging)
-                 [com.amazon.redshift/redshift-jdbc42-no-awssdk       ; Redshift JDBC driver without embedded Amazon SDK
-                  "1.2.12.1017"]
                  [com.cemerick/friend "0.2.3"                         ; auth library
                   :exclusions [commons-codec
                                org.apache.httpcomponents/httpclient
@@ -87,14 +85,12 @@
                   :exclusions [com.github.wendykierp/JTransforms]]
                  [net.sf.cssbox/cssbox "4.12"                         ; HTML / CSS rendering
                   :exclusions [org.slf4j/slf4j-api]]
-                 [net.snowflake/snowflake-jdbc "3.6.13"]              ; Snowflake JDBC Client Library
                  [org.clojars.pntblnk/clj-ldap "0.0.12"]              ; LDAP client
                  [org.liquibase/liquibase-core "3.6.2"                ; migration management (Java lib)
                   :exclusions [ch.qos.logback/logback-classic]]
                  [org.postgresql/postgresql "42.2.2"]                 ; Postgres driver
                  [org.slf4j/slf4j-log4j12 "1.7.25"]                   ; abstraction for logging frameworks -- allows end user to plug in desired logging framework at deployment time
-                 [org.tcrawley/dynapath "0.2.5"]                      ; Dynamically add Jars (e.g. Oracle or Vertica) to classpath
-                 [org.xerial/sqlite-jdbc "3.21.0.1"]                  ; SQLite driver
+                 [org.tcrawley/dynapath "1.0.0"]                      ; Dynamically add Jars (e.g. Oracle or Vertica) to classpath
                  [org.yaml/snakeyaml "1.18"]                          ; YAML parser (required by liquibase)
                  [prismatic/schema "1.1.9"]                           ; Data schema declaration and validation library
                  [puppetlabs/i18n "0.8.0"]                            ; Internationalization library
@@ -106,14 +102,14 @@
                  [stencil "0.5.0"]                                    ; Mustache templates for Clojure
                  [toucan "1.1.9"                                      ; Model layer, hydration, and DB utilities
                   :exclusions [honeysql]]]
-  :repositories [["redshift" "https://s3.amazonaws.com/redshift-driver-downloads"]]
   :plugins [[lein-environ "1.1.0"]                                    ; easy access to environment variables
             [lein-ring "0.12.3"                                       ; start the HTTP server with 'lein ring server'
              :exclusions [org.clojure/clojure]]]                      ; TODO - should this be a dev dependency ?
   :main ^:skip-aot metabase.core
   :manifest {"Liquibase-Package" "liquibase.change,liquibase.changelog,liquibase.database,liquibase.parser,liquibase.precondition,liquibase.datatype,liquibase.serializer,liquibase.sqlgenerator,liquibase.executor,liquibase.snapshot,liquibase.logging,liquibase.diff,liquibase.structure,liquibase.structurecompare,liquibase.lockservice,liquibase.sdk,liquibase.ext"}
   :target-path "target/%s"
-  :jvm-opts ["-XX:+IgnoreUnrecognizedVMOptions"                       ; ignore things not recognized for our Java version instead of refusing to start
+  :jvm-opts ["-Djava.system.class.loader=clojure.lang.DynamicClassLoader"
+             "-XX:+IgnoreUnrecognizedVMOptions"                       ; ignore things not recognized for our Java version instead of refusing to start
              "-Xverify:none"                                          ; disable bytecode verification when running in dev so it starts slightly faster
              "--add-modules=java.xml.bind"                            ; tell Java 9 (Oracle VM only) to add java.xml.bind to classpath. No longer on it by default. See https://stackoverflow.com/questions/43574426/how-to-resolve-java-lang-noclassdeffounderror-javax-xml-bind-jaxbexception-in-j
              "-Djava.awt.headless=true"]                              ; prevent Java icon from randomly popping up in dock when running `lein ring server`

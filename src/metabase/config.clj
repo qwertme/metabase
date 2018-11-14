@@ -3,7 +3,8 @@
              [io :as io]
              [shell :as shell]]
             [clojure.string :as s]
-            [environ.core :as environ])
+            [environ.core :as environ]
+            [metabase.util.i18n :refer [trs]])
   (:import clojure.lang.Keyword))
 
 (def ^Boolean is-windows?
@@ -70,12 +71,13 @@
       {:tag "?", :hash "?", :branch "?", :date "?"})))
 
 (defn- version-info-from-properties-file []
-  (when-let [props-file (io/resource "version.properties")]
-    (with-open [reader (io/reader props-file)]
-      (let [props (java.util.Properties.)]
-        (.load props reader)
-        (into {} (for [[k v] props]
-                   [(keyword k) v]))))))
+  (or (when-let [props-file (io/resource "version.properties")]
+        (with-open [reader (io/reader props-file)]
+          (let [props (java.util.Properties.)]
+            (.load props reader)
+            (into {} (for [[k v] props]
+                       [(keyword k) v])))))
+      (throw (Exception. (str (trs "Missing version.properties file; make sure to generate it with ./bin/build version."))))))
 
 (def mb-version-info
   "Information about the current version of Metabase.

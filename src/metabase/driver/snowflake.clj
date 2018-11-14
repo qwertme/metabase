@@ -13,6 +13,7 @@
             [metabase.driver.sql-jdbc
              [connection :as sql-jdbc.conn]
              [execute :as sql-jdbc.execute]
+             [initialize-dependencies :as init-deps]
              [sync :as sql-jdbc.sync]]
             [metabase.driver.sql.query-processor :as sql.qp]
             [metabase.models
@@ -28,8 +29,10 @@
 
 (driver/register! :snowflake, :parent :sql-jdbc)
 
-(defmethod driver/display-name :snowflake [_]
-  "Snowflake")
+(defmethod driver/display-name :snowflake [_] "Snowflake")
+
+(defmethod driver/initialize! :snowflake [_]
+  (init-deps/initialize-dependencies! :snowflake, :assert-class "net.snowflake.client.jdbc.SnowflakeDriver"))
 
 (defmethod sql-jdbc.conn/connection-details->spec :snowflake [_ {:keys [account regionid], :as opts}]
   (let [host (if regionid
