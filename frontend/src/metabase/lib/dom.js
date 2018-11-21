@@ -267,31 +267,32 @@ export function open(
   url,
   {
     // custom function for opening in same window
-    openInSameWindow = null,
+    openInSameWindow = url => clickLink(url, false),
     // custom function for opening in new window
-    openInBlankWindow = null,
+    openInBlankWindow = url => clickLink(url, true),
     ...options
   } = {},
 ) {
   if (shouldOpenInBlankWindow(url, options)) {
-    if (openInBlankWindow) {
-      openInBlankWindow(url);
-    } else {
-      const a = document.createElement("a");
-      a.href = url;
-      a.rel = "noopener";
-      a.target = "_blank";
-      a.click();
-    }
+    openInBlankWindow(url);
   } else {
-    if (openInSameWindow) {
-      openInSameWindow(url);
-    } else {
-      const a = document.createElement("a");
-      a.href = url;
-      a.rel = "noopener";
-      a.click();
+    openInSameWindow(url);
+  }
+}
+
+function clickLink(url, blank = false) {
+  const a = document.createElement("a");
+  a.style.display = "none";
+  document.body.appendChild(a);
+  try {
+    a.href = url;
+    a.rel = "noopener";
+    if (blank) {
+      a.target = "_blank";
     }
+    a.click();
+  } finally {
+    a.remove();
   }
 }
 
