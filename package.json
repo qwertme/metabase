@@ -6,8 +6,8 @@
   "repository": "https://github.com/metabase/metabase",
   "license": "private",
   "engines": {
-    "node": ">=8.13.0",
-    "npm": "8.13.0"
+    "node": ">=8.11.4",
+    "npm": "6.4.1"
   },
   "dependencies": {
     "ace-builds": "^1.2.2",
@@ -24,6 +24,7 @@
     "d3-scale": "^2.1.0",
     "dc": "^2.0.0",
     "diff": "^3.2.0",
+    "gettext-parser": "^3.1.0",
     "grid-styled": "^4.1.0",
     "history": "3",
     "humanize-plus": "^1.8.1",
