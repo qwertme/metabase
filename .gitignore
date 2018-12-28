@@ -56,3 +56,4 @@ bin/node_modules/
 *.trace.db
 /backend-checksums.txt
 .vscode
+otr-metabase.dump
