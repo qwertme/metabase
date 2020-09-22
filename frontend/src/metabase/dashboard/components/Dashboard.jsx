@@ -4,12 +4,14 @@
 
 import React, { Component } from "react";
 import PropTypes from "prop-types";
+import { Box } from "grid-styled";
 
-import DashboardHeader from "../components/DashboardHeader.jsx";
-import DashboardGrid from "../components/DashboardGrid.jsx";
-import LoadingAndErrorWrapper from "metabase/components/LoadingAndErrorWrapper.jsx";
-import { t } from "c-3po";
-import Parameters from "metabase/parameters/components/Parameters.jsx";
+import DashboardHeader from "../components/DashboardHeader";
+import DashboardGrid from "../components/DashboardGrid";
+import LoadingAndErrorWrapper from "metabase/components/LoadingAndErrorWrapper";
+import { t } from "ttag";
+import Parameters from "metabase/parameters/components/Parameters";
+import EmptyState from "metabase/components/EmptyState";
 
 import DashboardControls from "../hoc/DashboardControls";
 
@@ -20,37 +22,32 @@ import type {
   LocationDescriptor,
   ApiError,
   QueryParams,
-} from "metabase/meta/types";
+} from "metabase-types/types";
 
-import type {
-  Card,
-  CardId,
-  VisualizationSettings,
-} from "metabase/meta/types/Card";
+import type { CardId, VisualizationSettings } from "metabase-types/types/Card";
 import type {
   DashboardWithCards,
   DashboardId,
   DashCardId,
-} from "metabase/meta/types/Dashboard";
-import type { Revision, RevisionId } from "metabase/meta/types/Revision";
+} from "metabase-types/types/Dashboard";
+import type { Revision } from "metabase-types/types/Revision";
 import type {
   Parameter,
   ParameterId,
   ParameterValues,
   ParameterOption,
-} from "metabase/meta/types/Parameter";
+} from "metabase-types/types/Parameter";
 
 type Props = {
   location: LocationDescriptor,
 
   dashboardId: DashboardId,
   dashboard: DashboardWithCards,
-  cards: Card[],
   revisions: { [key: string]: Revision[] },
 
   isAdmin: boolean,
   isEditable: boolean,
-  isEditing: boolean,
+  isEditing: false | DashboardWithCards,
   isEditingParameter: boolean,
 
   parameters: Parameter[],
@@ -62,23 +59,17 @@ type Props = {
   addCardToDashboard: ({ dashId: DashCardId, cardId: CardId }) => void,
   addTextDashCardToDashboard: ({ dashId: DashCardId }) => void,
   archiveDashboard: (dashboardId: DashboardId) => void,
-  fetchCards: (filterMode?: string) => void,
   fetchDashboard: (dashboardId: DashboardId, queryParams: ?QueryParams) => void,
-  fetchRevisions: ({ entity: string, id: number }) => void,
-  revertToRevision: ({
-    entity: string,
-    id: number,
-    revision_id: RevisionId,
-  }) => void,
   saveDashboardAndCards: () => Promise<void>,
   setDashboardAttributes: ({ [attribute: string]: any }) => void,
   fetchDashboardCardData: (options: {
     reload: boolean,
     clear: boolean,
   }) => Promise<void>,
+  cancelFetchDashboardCardData: () => Promise<void>,
 
   setEditingParameter: (parameterId: ?ParameterId) => void,
-  setEditingDashboard: (isEditing: boolean) => void,
+  setEditingDashboard: (isEditing: false | DashboardWithCards) => void,
 
   addParameter: (option: ParameterOption) => Promise<Parameter>,
   removeParameter: (parameterId: ParameterId) => void,
@@ -93,9 +84,10 @@ type Props = {
   editingParameter: ?Parameter,
 
   refreshPeriod: number,
-  refreshElapsed: number,
+  setRefreshElapsedHook: Function,
   isFullscreen: boolean,
   isNightMode: boolean,
+  hideParameters: ?string,
 
   onRefreshPeriodChange: (?number) => void,
   onNightModeChange: boolean => void,
@@ -120,6 +112,7 @@ type State = {
   error: ?ApiError,
 };
 
+// NOTE: move DashboardControls HoC to container
 @DashboardControls
 export default class Dashboard extends Component {
   props: Props;
@@ -129,19 +122,16 @@ export default class Dashboard extends Component {
 
   static propTypes = {
     isEditable: PropTypes.bool,
-    isEditing: PropTypes.bool.isRequired,
+    isEditing: PropTypes.oneOfType([PropTypes.bool, PropTypes.object])
+      .isRequired,
     isEditingParameter: PropTypes.bool.isRequired,
 
     dashboard: PropTypes.object,
-    cards: PropTypes.array,
     parameters: PropTypes.array,
 
     addCardToDashboard: PropTypes.func.isRequired,
     archiveDashboard: PropTypes.func.isRequired,
-    fetchCards: PropTypes.func.isRequired,
     fetchDashboard: PropTypes.func.isRequired,
-    fetchRevisions: PropTypes.func.isRequired,
-    revertToRevision: PropTypes.func.isRequired,
     saveDashboardAndCards: PropTypes.func.isRequired,
     setDashboardAttributes: PropTypes.func.isRequired,
     setEditingDashboard: PropTypes.func.isRequired,
@@ -156,6 +146,7 @@ export default class Dashboard extends Component {
     isEditable: true,
   };
 
+  // NOTE: all of these lifecycle methods should be replaced with DashboardData HoC in container
   componentDidMount() {
     this.loadDashboard(this.props.dashboardId);
   }
@@ -171,6 +162,10 @@ export default class Dashboard extends Component {
     }
   }
 
+  componentWillUnmount() {
+    this.props.cancelFetchDashboardCardData();
+  }
+
   async loadDashboard(dashboardId: DashboardId) {
     this.props.initialize();
 
@@ -178,7 +173,6 @@ export default class Dashboard extends Component {
     const {
       addCardOnLoad,
       fetchDashboard,
-      fetchCards,
       addCardToDashboard,
       setErrorPage,
       location,
@@ -187,9 +181,7 @@ export default class Dashboard extends Component {
     try {
       await fetchDashboard(dashboardId, location.query);
       if (addCardOnLoad != null) {
-        // we have to load our cards before we can add one
-        await fetchCards();
-        this.setEditing(true);
+        this.setEditing(this.props.dashboard);
         addCardToDashboard({ dashId: dashboardId, cardId: addCardOnLoad });
       }
     } catch (error) {
@@ -202,7 +194,7 @@ export default class Dashboard extends Component {
     }
   }
 
-  setEditing = (isEditing: boolean) => {
+  setEditing = (isEditing: false | DashboardWithCards) => {
     this.props.onRefreshPeriodChange(null);
     this.props.setEditingDashboard(isEditing);
   };
@@ -224,8 +216,9 @@ export default class Dashboard extends Component {
       location,
       isFullscreen,
       isNightMode,
+      hideParameters,
     } = this.props;
-    let { error } = this.state;
+    const { error } = this.state;
     isNightMode = isNightMode && isFullscreen;
 
     let parametersWidget;
@@ -236,6 +229,7 @@ export default class Dashboard extends Component {
           isEditing={isEditing}
           isFullscreen={isFullscreen}
           isNightMode={isNightMode}
+          hideParameters={hideParameters}
           parameters={parameters.map(p => ({
             ...p,
             value: parameterValues[p.id],
@@ -272,23 +266,22 @@ export default class Dashboard extends Component {
                 parametersWidget={parametersWidget}
               />
             </header>
-            {!isFullscreen &&
-              parametersWidget && (
-                <div className="wrapper flex flex-column align-start mt2 relative z2">
-                  {parametersWidget}
-                </div>
-              )}
+            {!isFullscreen && parametersWidget && (
+              <div className="wrapper flex flex-column align-start mt2 relative z2">
+                {parametersWidget}
+              </div>
+            )}
             <div className="wrapper">
               {dashboard.ordered_cards.length === 0 ? (
-                <div className="absolute z1 top bottom left right flex flex-column layout-centered">
-                  <span className="QuestionCircle">?</span>
-                  <div className="text-normal mt3 mb1">
-                    {t`This dashboard is looking empty.`}
-                  </div>
-                  <div className="text-normal text-light">
-                    {t`Add a question to start making it useful!`}
-                  </div>
-                </div>
+                <Box mt={[2, 4]} color={isNightMode ? "white" : "inherit"}>
+                  <EmptyState
+                    illustrationElement={
+                      <span className="QuestionCircle">?</span>
+                    }
+                    title={t`This dashboard is looking empty.`}
+                    message={t`Add a question to start making it useful!`}
+                  />
+                </Box>
               ) : (
                 <DashboardGrid
                   {...this.props}

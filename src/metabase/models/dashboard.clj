@@ -3,11 +3,11 @@
              [data :refer [diff]]
              [set :as set]
              [string :as str]]
+            [clojure.core.async :as a]
             [clojure.tools.logging :as log]
             [metabase
              [events :as events]
              [public-settings :as public-settings]
-             [query-processor :as qp]
              [util :as u]]
             [metabase.automagic-dashboards.populate :as magic.populate]
             [metabase.models
@@ -20,7 +20,7 @@
              [permissions :as perms]
              [revision :as revision]]
             [metabase.models.revision.diff :refer [build-sentence]]
-            [metabase.query-processor.interface :as qpi]
+            [metabase.query-processor.async :as qp.async]
             [metabase.util.i18n :as ui18n]
             [toucan
              [db :as db]
@@ -51,21 +51,26 @@
 
 
 (defn- pre-delete [dashboard]
-  (db/delete! 'Revision :model "Dashboard" :model_id (u/get-id dashboard))
-  (db/delete! DashboardCard :dashboard_id (u/get-id dashboard)))
+  (db/delete! 'Revision :model "Dashboard" :model_id (u/get-id dashboard)))
 
 (defn- pre-insert [dashboard]
-  (let [defaults {:parameters []}]
-    (merge defaults dashboard)))
+  (let [defaults  {:parameters []}
+        dashboard (merge defaults dashboard)]
+    (u/prog1 dashboard
+      (collection/check-collection-namespace Dashboard (:collection_id dashboard)))))
 
+(defn- pre-update [dashboard]
+  (u/prog1 dashboard
+    (collection/check-collection-namespace Dashboard (:collection_id dashboard))))
 
 (u/strict-extend (class Dashboard)
   models/IModel
   (merge models/IModelDefaults
          {:properties  (constantly {:timestamped? true})
-          :types       (constantly {:description :clob, :parameters :json, :embedding_params :json})
+          :types       (constantly {:parameters :json, :embedding_params :json})
           :pre-delete  pre-delete
           :pre-insert  pre-insert
+          :pre-update  pre-update
           :post-select public-settings/remove-public-uuid-if-public-sharing-is-disabled})
 
   ;; You can read/write a Dashboard if you can read/write its parent Collection
@@ -86,7 +91,7 @@
 
 (defn- revert-dashboard!
   "Revert a Dashboard to the state defined by `serialized-dashboard`."
-  [dashboard-id user-id serialized-dashboard]
+  [_ dashboard-id user-id serialized-dashboard]
   ;; Update the dashboard description / name / permissions
   (db/update! Dashboard dashboard-id, (dissoc serialized-dashboard :cards))
   ;; Now update the cards as needed
@@ -113,9 +118,9 @@
 
   serialized-dashboard)
 
-(defn diff-dashboards-str
+(defn- diff-dashboards-str
   "Describe the difference between two Dashboard instances."
-  [dashboard₁ dashboard₂]
+  [_ dashboard₁ dashboard₂]
   (when dashboard₁
     (let [[removals changes]  (diff dashboard₁ dashboard₂)
           check-series-change (fn [idx card-changes]
@@ -155,8 +160,8 @@
   revision/IRevisioned
   (merge revision/IRevisionedDefaults
          {:serialize-instance  (fn [_ _ dashboard] (serialize-dashboard dashboard))
-          :revert-to-revision! (u/drop-first-arg revert-dashboard!)
-          :diff-str            (u/drop-first-arg diff-dashboards-str)}))
+          :revert-to-revision! revert-dashboard!
+          :diff-str            diff-dashboards-str}))
 
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
@@ -217,15 +222,21 @@
       (update-field-values-for-on-demand-dbs! old-param-field-ids new-param-field-ids))))
 
 
+;; TODO - we need to actually make this async, but then we'd need to make `save-card!` async, and so forth
 (defn- result-metadata-for-query
   "Fetch the results metadata for a `query` by running the query and seeing what the `qp` gives us in return."
   [query]
-  (binding [qpi/*disable-qp-logging* true]
-    (get-in (qp/process-query query) [:data :results_metadata :columns])))
+  (a/<!! (qp.async/result-metadata-for-query-async query)))
 
 (defn- save-card!
   [card]
-  (when (-> card :dataset_query not-empty)
+  (cond
+    ;; If this is a pre-existing card, just return it
+    (and (integer? (:id card)) (Card (:id card)))
+    card
+
+    ;; Don't save text cards
+    (-> card :dataset_query not-empty)
     (let [card (db/insert! 'Card
                  (-> card
                      (update :result_metadata #(or % (-> card

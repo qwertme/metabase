@@ -10,7 +10,6 @@
              [table :refer [Table]]]
             [metabase.sync.util-test :as sut]
             [metabase.test.data :as data]
-            metabase.test.util ; to make sure defaults for with-temp are registered
             [toucan.db :as db]
             [toucan.util.test :as tt]))
 
@@ -31,7 +30,6 @@
       ;; ok, now give all the Fields `?` as their `database_type`. (This is what the DB migration does for existing
       ;; Fields)
       (db/update-where! Field {:table_id (u/get-id venues-table)}, :database_type "?")
-      (db/update! Table (u/get-id venues-table) :fields_hash "something new")
       ;; now sync the DB again
       (let [{:keys [step-info task-history]} (sut/sync-database! "sync-fields" db)]
         [(sut/only-step-keys step-info)
@@ -55,7 +53,6 @@
   (tt/with-temp Database [db (select-keys (data/db) [:details :engine])]
     (let [{new-step-info :step-info, new-task-history :task-history} (sut/sync-database! "sync-fields" db)
           venues-table     (Table :db_id (u/get-id db), :display_name "Venues")]
-      (db/update! Table (u/get-id venues-table) :fields_hash "something new")
       ;; ok, now give all the Fields `:type/*` as their `base_type`
       (db/update-where! Field {:table_id (u/get-id venues-table)}, :base_type "type/*")
       ;; now sync the DB again

@@ -12,9 +12,7 @@
              [classify :as classify]
              [fingerprint :as fingerprint]]
             [metabase.util :as u]
-            [metabase.util
-             [date :as du]
-             [i18n :refer [trs]]]
+            [metabase.util.i18n :refer [trs]]
             [schema.core :as s]
             [toucan.db :as db]))
 
@@ -63,7 +61,7 @@
     (db/update-where! Field {:table_id            [:in ids]
                              :fingerprint_version i/latest-fingerprint-version
                              :last_analyzed       nil}
-      :last_analyzed (du/new-sql-timestamp))))
+      :last_analyzed :%now)))
 
 (s/defn ^:private update-fields-last-analyzed!
   "Update the `last_analyzed` date for all the recently re-fingerprinted/re-classified Fields in TABLE."
@@ -78,10 +76,8 @@
   (update-last-analyzed! tables))
 
 (s/defn analyze-table!
-  "Perform in-depth analysis for a TABLE."
+  "Perform in-depth analysis for a `table`."
   [table :- i/TableInstance]
-  ;; Table row count disabled for now because of performance issues
-  #_(table-row-count/update-row-count! table)
   (fingerprint/fingerprint-fields! table)
   (classify/classify-fields! table)
   (classify/classify-table! table)

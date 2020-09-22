@@ -1,7 +1,7 @@
 (ns metabase.sync-database.sync-dynamic-test
   "Tests for databases with a so-called 'dynamic' schema, i.e. one that is not hard-coded somewhere.
    A Mongo database is an example of such a DB. "
-  (:require [expectations :refer :all]
+  (:require [expectations :refer [expect]]
             [metabase
              [sync :as sync]
              [util :as u]]
@@ -18,8 +18,8 @@
             [toucan.util.test :as tt]))
 
 (defn- remove-nonsense
-  "Remove fields that aren't really relevant in the output for TABLES and their FIELDS.
-   Done for the sake of making debugging some of the tests below easier."
+  "Remove fields that aren't really relevant in the output for `tables` and their `fields`. Done for the sake of making
+  debugging some of the tests below easier."
   [tables]
   (for [table tables]
     (-> (u/select-non-nil-keys table [:schema :name :fields])
@@ -47,7 +47,7 @@
 
 
 ;; TODO - At some point these tests should be moved into a `sync-metadata-test` or `sync-metadata.fields-test`
-;; namespace
+;; namespace. Actually I think they might belong in `metabase.sync.sync-metadata.fields.sync-instances-test`
 
 ;; make sure nested fields get resynced correctly if their parent field didn't change
 (expect
@@ -61,7 +61,6 @@
           details-field-id      (u/get-id (db/select-one-id Field :table_id transactions-table-id, :name "details", :parent_id toucan-field-id))
           age-field-id          (u/get-id (db/select-one-id Field :table_id transactions-table-id, :name "age", :parent_id details-field-id))]
       (db/delete! Field :id age-field-id)
-      (db/update! Table transactions-table-id :fields_hash "something new")
       ;; now sync again.
       (sync-metadata/sync-db-metadata! db)
       ;; field should be added back
@@ -119,7 +118,6 @@
                                             :active        true))]
 
       ;; now sync again.
-      (db/update! Table transactions-table-id :fields_hash "something new")
       (sync-metadata/sync-db-metadata! db)
       ;; field should become inactive
       (db/select-one-field :active Field :id gender-field-id))))
@@ -150,7 +148,6 @@
                                             :active        true))]
 
       ;; now sync again.
-      (db/update! Table transactions-table-id :fields_hash "something new")
       (sync-metadata/sync-db-metadata! db)
       ;; field should become inactive
       (db/select-one-field :active Field :id blueberries-field-id))))

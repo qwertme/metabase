@@ -1,57 +1,57 @@
 (ns metabase.driver.mysql-test
-  (:require [clj-time.core :as t]
-            [expectations :refer :all]
-            [honeysql.core :as hsql]
+  (:require [clojure
+             [string :as str]
+             [test :refer :all]]
+            [clojure.java.jdbc :as jdbc]
             [metabase
+             [driver :as driver]
              [query-processor :as qp]
-             [query-processor-test :as qpt]
              [sync :as sync]
+             [test :as mt]
              [util :as u]]
-            [metabase.driver.mysql :as mysql]
             [metabase.driver.sql-jdbc.connection :as sql-jdbc.conn]
-            [metabase.driver.sql.query-processor :as sql.qp]
-            [metabase.models.database :refer [Database]]
-            [metabase.test
-             [data :as data]
-             [util :as tu]]
-            [metabase.test.data
-             [datasets :refer [expect-with-driver]]
-             [interface :refer [def-database-definition]]]
-            [metabase.util.date :as du]
-            [toucan.db :as db]
+            [metabase.models
+             [database :refer [Database]]
+             [field :refer [Field]]
+             [table :refer [Table]]]
+            [metabase.test.data.interface :as tx]
+            [toucan
+             [db :as db]
+             [hydrate :refer [hydrate]]]
             [toucan.util.test :as tt]))
 
-;; MySQL allows 0000-00-00 dates, but JDBC does not; make sure that MySQL is converting them to NULL when returning
-;; them like we asked
-(def-database-definition ^:private ^:const all-zero-dates
-  [["exciting-moments-in-history"
-     [{:field-name "moment", :base-type :type/DateTime}]
-     [["0000-00-00"]]]])
-
-(expect-with-driver :mysql
-  [[1 nil]]
-  ;; TODO - use the `rows` function from `metabse.query-processor-test`. Preferrably after it's moved to some sort of
-  ;; shared test util namespace
-  (-> (data/dataset metabase.driver.mysql-test/all-zero-dates
-        (data/run-mbql-query exciting-moments-in-history))
-      :data :rows))
-
-
-;; make sure connection details w/ extra params work as expected
-(expect
-  (str "//localhost:3306/cool?zeroDateTimeBehavior=convertToNull&useUnicode=true&characterEncoding=UTF8"
-       "&characterSetResults=UTF8&useLegacyDatetimeCode=true&useJDBCCompliantTimezoneShift=true"
-       "&useSSL=false&tinyInt1isBit=false")
-  (:subname (sql-jdbc.conn/connection-details->spec :mysql {:host               "localhost"
-                                                            :port               "3306"
-                                                            :dbname             "cool"
-                                                            :additional-options "tinyInt1isBit=false"})))
-
+(deftest all-zero-dates-test
+  (mt/test-driver :mysql
+    (testing (str "MySQL allows 0000-00-00 dates, but JDBC does not; make sure that MySQL is converting them to NULL "
+                  "when returning them like we asked")
+      (let [spec (sql-jdbc.conn/connection-details->spec :mysql (tx/dbdef->connection-details :mysql :server nil))]
+        (try
+          ;; Create the DB
+          (doseq [sql ["DROP DATABASE IF EXISTS all_zero_dates;"
+                       "CREATE DATABASE all_zero_dates;"]]
+            (jdbc/execute! spec [sql]))
+          ;; Create Table & add data
+          (let [details (tx/dbdef->connection-details :mysql :db {:database-name "all_zero_dates"})
+                spec    (-> (sql-jdbc.conn/connection-details->spec :mysql details)
+                            ;; allow inserting dates where value is '0000-00-00' -- this is disallowed by default on newer
+                            ;; versions of MySQL, but we still want to test that we can handle it correctly for older ones
+                            (assoc :sessionVariables "sql_mode='ALLOW_INVALID_DATES'"))]
+            (doseq [sql ["CREATE TABLE `exciting-moments-in-history` (`id` integer, `moment` timestamp);"
+                         "INSERT INTO `exciting-moments-in-history` (`id`, `moment`) VALUES (1, '0000-00-00');"]]
+              (jdbc/execute! spec [sql]))
+            ;; create & sync MB DB
+            (tt/with-temp Database [database {:engine "mysql", :details details}]
+              (sync/sync-database! database)
+              (mt/with-db database
+                ;; run the query
+                (is (= [[1 nil]]
+                       (mt/rows
+                         (mt/run-mbql-query exciting-moments-in-history))))))))))))
 
 ;; Test how TINYINT(1) columns are interpreted. By default, they should be interpreted as integers, but with the
 ;; correct additional options, we should be able to change that -- see
 ;; https://github.com/metabase/metabase/issues/3506
-(def-database-definition ^:private ^:const tiny-int-ones
+(tx/defdataset ^:private tiny-int-ones
   [["number-of-cans"
      [{:field-name "thing",          :base-type :type/Text}
       {:field-name "number-of-cans", :base-type {:native "tinyint(1)"}}]
@@ -61,116 +61,200 @@
 
 (defn- db->fields [db]
   (let [table-ids (db/select-ids 'Table :db_id (u/get-id db))]
-    (set (map (partial into {}) (db/select ['Field :name :base_type :special_type] :table_id [:in table-ids])))))
+    (set (map (partial into {}) (db/select [Field :name :base_type :special_type] :table_id [:in table-ids])))))
 
-;; By default TINYINT(1) should be a boolean
-(expect-with-driver :mysql
-  #{{:name "number-of-cans", :base_type :type/Boolean, :special_type :type/Category}
-    {:name "id",             :base_type :type/Integer, :special_type :type/PK}
-    {:name "thing",          :base_type :type/Text,    :special_type :type/Category}}
-  (data/with-temp-db [db tiny-int-ones]
-    (db->fields db)))
+(deftest tiny-int-1-test
+  (mt/test-driver :mysql
+    (mt/dataset tiny-int-ones
+      (testing "By default TINYINT(1) should be a boolean"
+        (is (= #{{:name "number-of-cans", :base_type :type/Boolean, :special_type :type/Category}
+                 {:name "id", :base_type :type/Integer, :special_type :type/PK}
+                 {:name "thing", :base_type :type/Text, :special_type :type/Category}}
+               (db->fields (mt/db)))))
 
-;; if someone says specifies `tinyInt1isBit=false`, it should come back as a number instead
-(expect-with-driver :mysql
-  #{{:name "number-of-cans", :base_type :type/Integer, :special_type :type/Quantity}
-    {:name "id",             :base_type :type/Integer, :special_type :type/PK}
-    {:name "thing",          :base_type :type/Text,    :special_type :type/Category}}
-  (data/with-temp-db [db tiny-int-ones]
-    (tt/with-temp Database [db {:engine "mysql"
-                                :details (assoc (:details db)
-                                           :additional-options "tinyInt1isBit=false")}]
-      (sync/sync-database! db)
-      (db->fields db))))
+      (testing "if someone says specifies `tinyInt1isBit=false`, it should come back as a number instead"
+        (tt/with-temp Database [db {:engine  "mysql"
+                                    :details (assoc (:details (mt/db))
+                                                    :additional-options "tinyInt1isBit=false")}]
+          (sync/sync-database! db)
+          (is (= #{{:name "number-of-cans", :base_type :type/Integer, :special_type :type/Quantity}
+                   {:name "id", :base_type :type/Integer, :special_type :type/PK}
+                   {:name "thing", :base_type :type/Text, :special_type :type/Category}}
+                 (db->fields db))))))))
 
-(expect-with-driver :mysql
-  "UTC"
-  (tu/db-timezone-id))
+(deftest db-timezone-id-test
+  (mt/test-driver :mysql
+    (let [timezone (fn [result-row]
+                     (let [db (mt/db)]
+                       (with-redefs [jdbc/query (let [orig jdbc/query]
+                                                  (fn [spec sql-args & options]
+                                                    (if (and (string? sql-args)
+                                                             (str/includes? sql-args "GLOBAL.time_zone"))
+                                                      [result-row]
+                                                      (apply orig spec sql-args options))))]
+                         (driver/db-default-timezone driver/*driver* db))))]
+      (testing "Should use global timezone by default"
+        (is (= "US/Pacific"
+               (timezone {:global_tz "US/Pacific", :system_tz "UTC"}))))
+      (testing "If global timezone is 'SYSTEM', should use system timezone"
+        (is (= "UTC"
+               (timezone {:global_tz "SYSTEM", :system_tz "UTC"}))))
+      (testing "Should fall back to returning `offset` if global/system aren't present"
+        (is (= "+00:00"
+               (timezone {:offset "00:00"}))))
+      (testing "If global timezone is invalid, should fall back to offset"
+        (is (= "-08:00"
+               (timezone {:global_tz "PDT", :system_tz "PDT", :offset "-08:00"}))))
+      (testing "Should add a `+` if needed to offset"
+        (is (= "+00:00"
+               (timezone {:global_tz "PDT", :system_tz "UTC", :offset "00:00"})))))
 
-(expect-with-driver :mysql
-  "-02:00"
-  (with-redefs [metabase.driver/execute-query (constantly {:rows [["2018-01-09 18:39:08.000000 -02"]]})]
-    (tu/db-timezone-id)))
-
-(expect-with-driver :mysql
-  "Europe/Paris"
-  (with-redefs [metabase.driver/execute-query (constantly {:rows [["2018-01-08 23:00:00.008 CET"]]})]
-    (tu/db-timezone-id)))
+    (testing "real timezone query doesn't fail"
+      (is (nil? (try
+                  (driver/db-default-timezone driver/*driver* (mt/db))
+                  nil
+                  (catch Throwable e
+                    e)))))))
 
 
-(def before-daylight-savings (du/str->date-time "2018-03-10 10:00:00" du/utc))
-(def after-daylight-savings (du/str->date-time "2018-03-12 10:00:00" du/utc))
+(def ^:private before-daylight-savings #t "2018-03-10T10:00:00Z")
+(def ^:private after-daylight-savings  #t "2018-03-12T10:00:00Z")
 
-(expect (#'mysql/timezone-id->offset-str "US/Pacific" before-daylight-savings) "-08:00")
-(expect (#'mysql/timezone-id->offset-str "US/Pacific" after-daylight-savings)  "-07:00")
+(deftest timezone-date-formatting-test
+  (mt/test-driver :mysql
+    ;; Most of our tests either deal in UTC (offset 00:00) or America/Los_Angeles timezones (-07:00/-08:00). When dealing
+    ;; with dates, we will often truncate the timestamp to a date. When we only test with negative timezone offsets, in
+    ;; combination with this truncation, means we could have a bug and it's hidden by this negative-only offset. As an
+    ;; example, if we have a datetime like 2018-08-17 00:00:00-08:00, converting to UTC this becomes 2018-08-17
+    ;; 08:00:00+00:00, which when truncated is still 2018-08-17. That same scenario in Hong Kong is 2018-08-17
+    ;; 00:00:00+08:00, which then becomes 2018-08-16 16:00:00+00:00 when converted to UTC, which will truncate to
+    ;; 2018-08-16, instead of 2018-08-17
+    (mt/with-system-timezone-id "Asia/Hong_Kong"
+      (letfn [(run-query-with-report-timezone [report-timezone]
+                (mt/with-temporary-setting-values [report-timezone report-timezone]
+                  (mt/first-row
+                    (qp/process-query
+                     {:database   (mt/id)
+                      :type       :native
+                      :settings   {:report-timezone "UTC"}
+                      :native     {:query         "SELECT cast({{date}} as date)"
+                                   :template-tags {:date {:name "date" :display_name "Date" :type "date" }}}
+                      :parameters [{:type "date/single" :target ["variable" ["template-tag" "date"]] :value "2018-04-18"}]}))))]
+        (testing "date formatting when system-timezone == report-timezone"
+          (is (= ["2018-04-18T00:00:00+08:00"]
+                 (run-query-with-report-timezone "Asia/Hong_Kong"))))
 
-(expect (#'mysql/timezone-id->offset-str "UTC" before-daylight-savings) "+00:00")
-(expect (#'mysql/timezone-id->offset-str "UTC" after-daylight-savings) "+00:00")
+        ;; This tests a similar scenario, but one in which the JVM timezone is in Hong Kong, but the report timezone
+        ;; is in Los Angeles. The Joda Time date parsing functions for the most part default to UTC. Our tests all run
+        ;; with a UTC JVM timezone. This test catches a bug where we are incorrectly assuming a date is in UTC when
+        ;; the JVM timezone is different.
+        ;;
+        ;; The original bug can be found here: https://github.com/metabase/metabase/issues/8262. The MySQL driver code
+        ;; was parsing the date using JodateTime's date parser, which is in UTC. The MySQL driver code was assuming
+        ;; that date was in the system timezone rather than UTC which caused an incorrect conversion and with the
+        ;; trucation, let to it being off by a day
+        (testing "date formatting when system-timezone != report-timezone"
+          (is (= ["2018-04-18T00:00:00-07:00"]
+                 (run-query-with-report-timezone "America/Los_Angeles"))))))))
 
-(expect (#'mysql/timezone-id->offset-str "America/Los_Angeles" before-daylight-savings) "-08:00")
-(expect (#'mysql/timezone-id->offset-str "America/Los_Angeles" after-daylight-savings) "-07:00")
+(def ^:private sample-connection-details
+  {:db "my_db", :host "localhost", :port "3306", :user "cam", :password "bad-password"})
 
-;; make sure DateTime types generate appropriate SQL...
-;; ...with no report-timezone set
-(expect
-  ["?" (du/->Timestamp #inst "2018-01-03")]
-  (tu/with-temporary-setting-values [report-timezone nil]
-    (hsql/format (sql.qp/->honeysql :mysql (du/->Timestamp #inst "2018-01-03")))))
+(def ^:private sample-jdbc-spec
+  {:password             "bad-password"
+   :characterSetResults  "UTF8"
+   :characterEncoding    "UTF8"
+   :classname            "org.mariadb.jdbc.Driver"
+   :subprotocol          "mysql"
+   :zeroDateTimeBehavior "convertToNull"
+   :user                 "cam"
+   :subname              "//localhost:3306/my_db"
+   :useCompression       true
+   :useUnicode           true})
 
-;; ...with a report-timezone set
-(expect
-  ["convert_tz('2018-01-03T00:00:00.000', '+00:00', '-08:00')"]
-  (tu/with-temporary-setting-values [report-timezone "US/Pacific"]
-    (hsql/format (sql.qp/->honeysql :mysql (du/->Timestamp #inst "2018-01-03")))))
+(deftest connection-spec-test
+  (testing "Do `:ssl` connection details give us the connection spec we'd expect?"
+    (= (assoc sample-jdbc-spec :useSSL true)
+       (sql-jdbc.conn/connection-details->spec :mysql (assoc sample-connection-details :ssl true))))
 
-;; ...with a report-timezone set to the same as the system timezone (shouldn't need to do TZ conversion)
-(expect
-  ["?" (du/->Timestamp #inst "2018-01-03")]
-  (tu/with-temporary-setting-values [report-timezone "UTC"]
-    (hsql/format (sql.qp/->honeysql :mysql (du/->Timestamp #inst "2018-01-03")))))
+  (testing "what about non-SSL connections?"
+    (is (= (assoc sample-jdbc-spec :useSSL false)
+           (sql-jdbc.conn/connection-details->spec :mysql sample-connection-details))))
 
-;; Most of our tests either deal in UTC (offset 00:00) or America/Los_Angeles timezones (-07:00/-08:00). When dealing
-;; with dates, we will often truncate the timestamp to a date. When we only test with negative timezone offsets, in
-;; combination with this truncation, means we could have a bug and it's hidden by this negative-only offset. As an
-;; example, if we have a datetime like 2018-08-17 00:00:00-08:00, converting to UTC this becomes 2018-08-17
-;; 08:00:00+00:00, which when truncated is still 2018-08-17. That same scenario in Hong Kong is 2018-08-17
-;; 00:00:00+08:00, which then becomes 2018-08-16 16:00:00+00:00 when converted to UTC, which will truncate to
-;; 2018-08-16, instead of 2018-08-17
-;;
-;; This test ensures if our JVM timezone and reporting timezone are Asia/Hong_Kong, we get a correctly formatted date
-(expect-with-driver :mysql
-  ["2018-04-18T00:00:00.000+08:00"]
-  (tu/with-jvm-tz (t/time-zone-for-id "Asia/Hong_Kong")
-    (tu/with-temporary-setting-values [report-timezone "Asia/Hong_Kong"]
-      (qpt/first-row
-        (du/with-effective-timezone (Database (data/id))
-          (qp/process-query
-           {:database   (data/id)
-            :type       :native
-            :settings   {:report-timezone "UTC"}
-            :native     {:query         "SELECT cast({{date}} as date)"
-                         :template-tags {:date {:name "date" :display_name "Date" :type "date" }}}
-            :parameters [{:type "date/single" :target ["variable" ["template-tag" "date"]] :value "2018-04-18"}]}))))))
+  (testing "Connections that are `:ssl false` but with `useSSL` in the additional options should be treated as SSL (see #9629)"
+    (is (= (assoc sample-jdbc-spec :useSSL true, :subname "//localhost:3306/my_db?useSSL=true&trustServerCertificate=true")
+           (sql-jdbc.conn/connection-details->spec :mysql
+             (assoc sample-connection-details
+                    :ssl false
+                    :additional-options "useSSL=true&trustServerCertificate=true"))))))
 
-;; This tests a similar scenario, but one in which the JVM timezone is in Hong Kong, but the report timezone is in Los
-;; Angeles. The Joda Time date parsing functions for the most part default to UTC. Our tests all run with a UTC JVM
-;; timezone. This test catches a bug where we are incorrectly assuming a date is in UTC when the JVM timezone is
-;; different.
-;;
-;; The original bug can be found here: https://github.com/metabase/metabase/issues/8262. The MySQL driver code was
-;; parsing the date using JodateTime's date parser, which is in UTC. The MySQL driver code was assuming that date was
-;; in the system timezone rather than UTC which caused an incorrect conversion and with the trucation, let to it being
-;; off by a day
-(expect-with-driver :mysql
-  ["2018-04-18T00:00:00.000-07:00"]
-  (tu/with-jvm-tz (t/time-zone-for-id "Asia/Hong_Kong")
-    (tu/with-temporary-setting-values [report-timezone "America/Los_Angeles"]
-      (qpt/first-row
-        (du/with-effective-timezone (Database (data/id))
-          (qp/process-query
-            {:database (data/id),
-             :type :native,
-             :settings {:report-timezone "UTC"}
-             :native     {:query "SELECT cast({{date}} as date)"
-                          :template-tags {:date {:name "date" :display_name "Date" :type "date" }}}
-             :parameters [{:type "date/single" :target ["variable" ["template-tag" "date"]] :value "2018-04-18"}]}))))))
+(deftest read-timediffs-test
+  (mt/test-driver :mysql
+    (testing "Make sure negative result of *diff() functions don't cause Exceptions (#10983)"
+      (doseq [{:keys [interval expected message]}
+              [{:interval "-1 HOUR"
+                :expected "-01:00:00"
+                :message  "Negative durations should come back as Strings"}
+               {:interval "25 HOUR"
+                :expected "25:00:00"
+                :message  "Durations outside the valid range of `LocalTime` should come back as Strings"}
+               {:interval "1 HOUR"
+                :expected #t "01:00:00"
+                :message  "A `timediff()` result within the valid range should still come back as a `LocalTime`"}]]
+        (testing (str "\n" interval "\n" message)
+          (is (= [expected]
+                 (mt/first-row
+                   (qp/process-query
+                    (assoc (mt/native-query
+                             {:query (format "SELECT timediff(current_timestamp + INTERVAL %s, current_timestamp)" interval)})
+                           ;; disable the middleware that normally converts `LocalTime` to `Strings` so we can verify
+                           ;; our driver is actually doing the right thing
+                           :middleware {:format-rows? false}))))))))))
+
+(defn- table-fingerprint
+  [{:keys [fields name]}]
+  {:name   name
+   :fields (map #(select-keys % [:name :base_type]) fields)})
+
+(deftest system-versioned-tables-test
+  (mt/test-driver :mysql
+    (testing "system versioned tables appear during a sync"
+      (let [spec (sql-jdbc.conn/connection-details->spec :mysql (tx/dbdef->connection-details :mysql :server nil))]
+       (try
+         ;; Create the DB
+         (doseq [sql ["DROP DATABASE IF EXISTS versioned_tables;"
+                      "CREATE DATABASE versioned_tables;"]]
+           (jdbc/execute! spec [sql]))
+         ;; Create Table & add data
+         (let [details (tx/dbdef->connection-details :mysql :db {:database-name "versioned_tables"})
+               spec    (sql-jdbc.conn/connection-details->spec :mysql details)
+               compat  (try
+                         (doseq [sql ["CREATE TABLE IF NOT EXISTS src1 (id INTEGER, t TEXT);"
+                                      "CREATE TABLE IF NOT EXISTS src2 (id INTEGER, t TEXT);"
+                                      "ALTER TABLE src2 ADD SYSTEM VERSIONING;"
+                                      "INSERT INTO src1 VALUES (1, '2020-03-01 12:20:35');"
+                                      "INSERT INTO src2 VALUES (1, '2020-03-01 12:20:35');"]]
+                           (jdbc/execute! spec [sql]))
+                         true
+                         (catch java.sql.SQLSyntaxErrorException se
+                           ;; if an error is received with SYSTEM VERSIONING mentioned, the version
+                           ;; of mysql or mariadb being tested against does not support system versioning,
+                           ;; so do not continue
+                           (if (re-matches #".*VERSIONING'.*" (.getMessage se))
+                             false
+                             (throw se))))]
+           (when compat
+             (tt/with-temp Database [database {:engine "mysql", :details details}]
+               (sync/sync-database! database)
+               (is (= [{:name   "src1"
+                        :fields [{:name      "id"
+                                  :base_type :type/Integer}
+                                 {:name      "t"
+                                  :base_type :type/Text}]}
+                       {:name   "src2"
+                        :fields [{:name      "id"
+                                  :base_type :type/Integer}
+                                 {:name      "t"
+                                  :base_type :type/Text}]}]
+                      (->> (hydrate (db/select Table :db_id (:id database) {:order-by [:name]}) :fields)
+                           (map table-fingerprint))))))))))))

@@ -1,5 +1,5 @@
 import React from "react";
-import LegendHeader from "./LegendHeader.jsx";
+import LegendHeader from "./LegendHeader";
 import _ from "underscore";
 
 export const TitleLegendHeader = ({
@@ -9,8 +9,8 @@ export const TitleLegendHeader = ({
   actionButtons,
 }) => {
   // $FlowFixMe
-  let originalSeries = series._raw || series;
-  let cardIds = _.uniq(originalSeries.map(s => s.card.id));
+  const originalSeries = series._raw || series;
+  const cardIds = _.uniq(originalSeries.map(s => s.card.id));
   const isComposedOfMultipleQuestions = cardIds.length > 1;
 
   if (settings["card.title"]) {
@@ -23,6 +23,7 @@ export const TitleLegendHeader = ({
             : {
                 id: cardIds[0],
                 dataset_query: originalSeries[0].card.dataset_query,
+                display: originalSeries[0].card.display,
               }),
         },
       },

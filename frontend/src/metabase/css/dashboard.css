@@ -1,8 +1,3 @@
-.Dashboard {
-  background-color: var(--color-bg-light);
-  min-height: 100vh;
-}
-
 .DashboardHeader {
   background-color: white;
   border-bottom: var(--border-size) var(--border-style) var(--color-border);
@@ -31,6 +26,10 @@
 }
 
 /* Fullscreen mode */
+.Dashboard.Dashboard--fullscreen {
+  min-height: 100vh;
+}
+
 .Dashboard.Dashboard--fullscreen .Header-button {
   color: var(--color-text-light);
 }
@@ -56,9 +55,8 @@
   color: var(--color-text-white);
 }
 
-.Dashboard.Dashboard--night .Header-button,
-.Dashboard.Dashboard--night .Header-button svg {
-  color: color(var(--color-text-medium) alpha(-70%));
+.Dashboard.Dashboard--night .Header-button {
+  color: var(--color-text-medium);
 }
 
 .Dashboard.Dashboard--fullscreen .fullscreen-normal-text {
@@ -365,6 +363,17 @@
 /* when in night mode code snippets should have a more readable background-color */
 .Dashboard--night pre code {
   background-color: color(var(--color-bg-white) alpha(-86%));
+}
+
+.Dashboard--night text.value-label-outline {
+  stroke: var(--night-mode-card);
+}
+
+.Dashboard text.value-label,
+.Dashboard text.value-label-outline,
+.Dashboard text.value-label-white,
+.Dashboard .LineAreaBarChart .dc-chart .axis text {
+  font-size: 12px;
 }
 
 .ScalarValue {

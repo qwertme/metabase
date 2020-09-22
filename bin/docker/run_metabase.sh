@@ -114,10 +114,27 @@ JAVA_OPTS="${JAVA_OPTS} -XX:+IgnoreUnrecognizedVMOptions"
 JAVA_OPTS="${JAVA_OPTS} -Dfile.encoding=UTF-8"
 JAVA_OPTS="${JAVA_OPTS} -Dlogfile.path=target/log"
 JAVA_OPTS="${JAVA_OPTS} -server"
-JAVA_OPTS="${JAVA_OPTS} --add-modules=java.xml.bind"                # needed for Java 9 (Oracle VM only) because java.xml.bind is no longer on SE classpath by default since it's EE
 
 if [ ! -z "$JAVA_TIMEZONE" ]; then
     JAVA_OPTS="${JAVA_OPTS} -Duser.timezone=${JAVA_TIMEZONE}"
+fi
+
+# Ensure JAR file is world readable
+chmod o+r /app/metabase.jar
+
+# Initialize the Metabase db from H2 dump, if available
+INITIAL_DB=$(ls /app/initial*.db 2> /dev/null | head -n 1)
+if [ -f "${INITIAL_DB}" ]; then
+    echo "Initializing Metabase database from H2 database ${INITIAL_DB}..."
+    chmod o+r ${INITIAL_DB}
+    su metabase -s /bin/sh -c "exec java $JAVA_OPTS -jar /app/metabase.jar load-from-h2 ${INITIAL_DB%.mv.db} $@"
+
+    if [ $? -ne 0 ]; then
+        echo "Failed to initialize database from H2 database!"
+        exit 1
+    fi
+
+    echo "Done."
 fi
 
 # Launch the application

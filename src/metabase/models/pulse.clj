@@ -22,13 +22,14 @@
              [util :as u]]
             [metabase.models
              [card :refer [Card]]
+             [collection :as collection]
              [interface :as i]
              [permissions :as perms]
              [pulse-card :refer [PulseCard]]
              [pulse-channel :as pulse-channel :refer [PulseChannel]]
              [pulse-channel-recipient :refer [PulseChannelRecipient]]]
             [metabase.util
-             [i18n :refer [tru]]
+             [i18n :refer [deferred-tru tru]]
              [schema :as su]]
             [schema.core :as s]
             [toucan
@@ -40,9 +41,13 @@
 
 (models/defmodel Pulse :pulse)
 
-(defn- pre-delete [notification]
-  (doseq [model [PulseCard PulseChannel]]
-    (db/delete! model :pulse_id (u/get-id notification))))
+(defn- pre-insert [notification]
+  (u/prog1 notification
+    (collection/check-collection-namespace Pulse (:collection_id notification))))
+
+(defn- pre-update [updates]
+  (u/prog1 updates
+    (collection/check-collection-namespace Pulse (:collection_id updates))))
 
 (defn- alert->card
   "Return the Card associated with an Alert, fetching it if needed, for permissions-checking purposes."
@@ -54,7 +59,7 @@
    ;; can only have one Card
    (-> (hydrate alert :cards) :cards first)
    ;; if there's still not a Card, throw an Exception!
-   (throw (Exception. (str (tru "Invalid Alert: Alert does not have a Card assoicated with it"))))))
+   (throw (Exception. (tru "Invalid Alert: Alert does not have a Card assoicated with it")))))
 
 (defn- perms-objects-set
   "Permissions to read or write a *Pulse* are the same as those of its parent Collection.
@@ -69,14 +74,19 @@
 
 (u/strict-extend (class Pulse)
   models/IModel
-  (merge models/IModelDefaults
-         {:hydration-keys (constantly [:pulse])
-          :properties     (constantly {:timestamped? true})
-          :pre-delete     pre-delete})
+  (merge
+   models/IModelDefaults
+   {:hydration-keys (constantly [:pulse])
+    :properties     (constantly {:timestamped? true})
+    :pre-insert     pre-insert
+    :pre-update     pre-update})
   i/IObjectPermissions
-  {:can-read?         (partial i/current-user-has-full-permissions? :read)
-   :can-write?        (partial i/current-user-has-full-permissions? :write)
-   :perms-objects-set perms-objects-set})
+  (merge
+   i/IObjectPermissionsDefaults
+   {:can-read?         (partial i/current-user-has-full-permissions? :read)
+    :can-write?        (partial i/current-user-has-full-permissions? :write)
+    :perms-objects-set perms-objects-set}))
+
 
 ;;; ---------------------------------------------------- Schemas -----------------------------------------------------
 
@@ -90,7 +100,7 @@
   (su/with-api-error-message {:id          su/IntGreaterThanZero
                               :include_csv s/Bool
                               :include_xls s/Bool}
-    (tru "value must be a map with the keys `{0}`, `{1}`, and `{2}`." "id" "include_csv" "include_xls")))
+    (deferred-tru "value must be a map with the keys `{0}`, `{1}`, and `{2}`." "id" "include_csv" "include_xls")))
 
 (def HybridPulseCard
   "This schema represents the cards that are included in a pulse. This is the data from the `PulseCard` and some
@@ -102,7 +112,7 @@
               :description   (s/maybe s/Str)
               :display       (s/maybe su/KeywordOrString)
               :collection_id (s/maybe su/IntGreaterThanZero)})
-    (tru "value must be a map with the following keys `({0})`"
+    (deferred-tru "value must be a map with the following keys `({0})`"
          (str/join ", " ["collection_id" "description" "display" "id" "include_csv" "include_xls" "name"]))))
 
 (def CoercibleToCardRef
@@ -138,7 +148,8 @@
 
 ;;; ---------------------------------------- Notification Fetching Helper Fns ----------------------------------------
 
-(s/defn ^:private hydrate-notification :- PulseInstance
+(s/defn hydrate-notification :- PulseInstance
+  "Hydrate a Pulse or Alert with the Fields needed for sending it."
   [notification :- PulseInstance]
   (-> notification
       (hydrate :creator :cards [:channels :recipients])
@@ -153,7 +164,7 @@
 ;; TODO - do we really need this function? Why can't we just use `db/select` and `hydrate` like we do for everything
 ;; else?
 (s/defn retrieve-pulse :- (s/maybe PulseInstance)
-  "Fetch a single *Pulse*, and hydrate it with a set of 'standard' hydrations; remove Alert coulmns, since this is a
+  "Fetch a single *Pulse*, and hydrate it with a set of 'standard' hydrations; remove Alert columns, since this is a
   *Pulse* and they will all be unset."
   [pulse-or-id]
   (some-> (db/select-one Pulse :id (u/get-id pulse-or-id), :alert_condition nil)
@@ -161,7 +172,8 @@
           notification->pulse))
 
 (s/defn retrieve-notification :- (s/maybe PulseInstance)
-  "Fetch an Alert or Pulse, and do the 'standard' hydrations."
+  "Fetch an Alert or Pulse, and do the 'standard' hydrations, adding `:channels` with `:recipients`, `:creator`, and
+  `:cards`."
   [notification-or-id & additional-condtions]
   (some-> (apply Pulse :id (u/get-id notification-or-id), additional-condtions)
           hydrate-notification))
@@ -407,7 +419,7 @@
 
 ;; TODO - why do we make sure to strictly validate everything when we create a PULSE but not when we create an ALERT?
 (defn update-alert!
-  "Updates the given `ALERT` and returns it"
+  "Updates the given `alert` and returns it"
   [alert]
   (update-notification! (alert->notification alert))
   ;; fetch the fully updated pulse and return it (and fire off an event)
@@ -433,5 +445,4 @@
                                                                 [:= :pcr.user_id user-id]]} "r"]]}]})]
     (when (zero? result)
       (log/warnf "Failed to remove user-id '%s' from alert-id '%s'" user-id alert-id))
-
     result))
