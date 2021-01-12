@@ -1,11 +1,10 @@
 (ns metabase.query-processor.middleware.catch-exceptions
   "Middleware for catching exceptions thrown by the query processor and returning them in a friendlier format."
   (:require [clojure.tools.logging :as log]
-            [metabase.query-processor
-             [context :as context]
-             [error-type :as error-type]
-             [reducible :as qp.reducible]]
+            [metabase.query-processor.context :as context]
+            [metabase.query-processor.error-type :as error-type]
             [metabase.query-processor.middleware.permissions :as perms]
+            [metabase.query-processor.reducible :as qp.reducible]
             [metabase.util :as u]
             [metabase.util.i18n :refer [trs]]
             schema.utils)
@@ -161,7 +160,7 @@
                 (swap! extra-info assoc :native query)
                 (nativef query context))
               (raisef* [e context]
-               ;; if the exception is the special quit-early exception, forward this to our parent `raisef` exception
+               ;; if the exception is the special quit-result exception, forward this to our parent `raisef` exception
                ;; handler, which has logic for handling that case
                 (if (qp.reducible/quit-result e)
                   (raisef e context)

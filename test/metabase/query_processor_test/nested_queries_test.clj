@@ -3,21 +3,19 @@
   (:require [clojure.test :refer :all]
             [honeysql.core :as hsql]
             [java-time :as t]
-            [metabase
-             [driver :as driver]
-             [query-processor :as qp]
-             [query-processor-test :as qp.test]
-             [test :as mt]
-             [util :as u]]
+            [metabase.driver :as driver]
             [metabase.mbql.schema :as mbql.s]
-            [metabase.models
-             [card :as card :refer [Card]]
-             [collection :as collection :refer [Collection]]
-             [interface :as models]
-             [permissions :as perms]
-             [permissions-group :as group]
-             [segment :refer [Segment]]]
-            [metabase.models.query.permissions :as query-perms]))
+            [metabase.models.card :as card :refer [Card]]
+            [metabase.models.collection :as collection :refer [Collection]]
+            [metabase.models.interface :as models]
+            [metabase.models.permissions :as perms]
+            [metabase.models.permissions-group :as group]
+            [metabase.models.query.permissions :as query-perms]
+            [metabase.models.segment :refer [Segment]]
+            [metabase.query-processor :as qp]
+            [metabase.query-processor-test :as qp.test]
+            [metabase.test :as mt]
+            [metabase.util :as u]))
 
 (deftest basic-test
   (mt/test-drivers (mt/normal-drivers-with-feature :nested-queries)
@@ -58,12 +56,16 @@
                       :limit        5})))))))))
 
 
-(defn- breakout-results [& {:keys [has-source-metadata?], :or {has-source-metadata? true}}]
+(defn- breakout-results [& {:keys [has-source-metadata? has-extra-cols?]
+                            :or   {has-source-metadata? true
+                                   has-extra-cols?      false}}]
   {:rows [[1 22]
           [2 59]
           [3 13]
           [4  6]]
-   :cols [(cond-> (qp.test/breakout-col (qp.test/field-literal-col :venues :price))
+   :cols [(cond-> (qp.test/breakout-col ((if has-extra-cols?
+                                           qp.test/field-literal-col-keep-extra-cols
+                                           qp.test/field-literal-col) :venues :price))
             (not has-source-metadata?)
             (dissoc :id :special_type :settings :fingerprint :table_id))
           (qp.test/aggregate-col :count)]})
@@ -186,7 +188,7 @@
     ;; This is the format that is actually used by the frontend; it gets translated to the normal `source-query`
     ;; format by middleware. It's provided as a convenience so only minimal changes need to be made to the frontend.
     (mt/with-temp Card [card (venues-mbql-card-def)]
-      (is (= (breakout-results)
+      (is (= (breakout-results :has-extra-cols? true)
              (qp.test/rows-and-cols
                (mt/format-rows-by [int int]
                  (qp/process-query
@@ -324,7 +326,8 @@
                       [:source.LONGITUDE :LONGITUDE]
                       [:source.PRICE :PRICE]]
              :from   [[venues-source-honeysql :source]]
-             :where  [:not= :source.text "Coo"]
+             :where  [:or [:not= :source.text "Coo"]
+                      [:= :source.text nil]]
              :limit  10})
            (qp/query->native
             (mt/mbql-query nil
@@ -369,15 +372,14 @@
 
 (deftest correct-column-metadata-test
   (testing "make sure a query using a source query comes back with the correct columns metadata"
-    (is (= (map
-            (partial qp.test/field-literal-col :venues)
-            [:id :name :category_id :latitude :longitude :price])
+    (is (= (map (partial qp.test/field-literal-col-keep-extra-cols :venues)
+                [:id :name :category_id :latitude :longitude :price])
            (mt/cols
              (mt/with-temp Card [card (venues-mbql-card-def)]
                (qp/process-query (query-with-source-card card)))))))
 
   (testing "make sure a breakout/aggregate query using a source query comes back with the correct columns metadata"
-    (is (= [(qp.test/breakout-col (qp.test/field-literal-col :venues :price))
+    (is (= [(qp.test/breakout-col (qp.test/field-literal-col-keep-extra-cols :venues :price))
             (qp.test/aggregate-col :count)]
            (mt/cols
              (mt/with-temp Card [card (venues-mbql-card-def)]
@@ -416,7 +418,6 @@
         (let [[date-col count-col] (for [col (-> (qp/process-query {:database (mt/id), :type :query, :query source-query})
                                                  :data :cols)]
                                      (-> (into {} col)
-                                         (dissoc :description :parent_id :visibility_type)
                                          (assoc :source :fields)))]
           (is (= [(assoc date-col  :field_ref [:field-literal "DATE" :type/Date])
                   (assoc count-col :field_ref [:field-literal "count" (:base_type count-col)])]
@@ -698,3 +699,21 @@
                                :order-by     [[:asc !year.date]]
                                :limit        1}
                 :fields       [!year.*date]}))))))
+
+;; https://github.com/metabase/metabase/issues/10511
+(deftest correctly-alias-duplicate-names-in-breakout-test
+  (mt/test-drivers (mt/normal-drivers-with-feature :nested-queries :expressions :foreign-keys)
+    (testing "Do we correctly alias name clashes in breakout"
+      (is (= [[ "20th Century Cafe" "Café" 1 ]
+              [ "25°" "Burger" 1 ]
+              [ "33 Taps" "Bar" 1 ]]
+             (mt/formatted-rows [str str int]
+               (mt/run-mbql-query venues
+                 {:source-query {:source-table $$venues
+                                 :aggregation [[:count]]
+                                 :breakout    [$name [:joined-field "c" $categories.name]]
+                                 :joins       [{:source-table $$categories
+                                                :alias        "c"
+                                                :condition    [:= $category_id [:joined-field "c" $categories.id]]}]}
+                  :filter       [:> [:field-literal "count" :type/Number] 0]
+                  :limit        3})))))))

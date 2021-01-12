@@ -2,18 +2,16 @@
   "Tests for `/api/field` endpoints."
   (:require [clojure.test :refer :all]
             [medley.core :as m]
-            [metabase
-             [models :refer [Database Field FieldValues Table]]
-             [test :as mt]
-             [util :as u]]
             [metabase.api.field :as field-api]
             [metabase.driver.util :as driver.u]
+            [metabase.models :refer [Database Field FieldValues Table]]
+            [metabase.test :as mt]
             [metabase.test.fixtures :as fixtures]
             [metabase.timeseries-query-processor-test.util :as tqp.test]
+            [metabase.util :as u]
             [ring.util.codec :as codec]
-            [toucan
-             [db :as db]
-             [hydrate :refer [hydrate]]]))
+            [toucan.db :as db]
+            [toucan.hydrate :refer [hydrate]]))
 
 (use-fixtures :once (fixtures/initialize :plugins))
 
@@ -23,10 +21,10 @@
   (merge
    (select-keys (mt/db) [:id :timezone])
    (dissoc (mt/object-defaults Database) :details)
-   {:engine   "h2"
-    :name     "test-data"
-    :features (mapv u/qualified-name (driver.u/features :h2))
-    :timezone "UTC"}))
+   {:engine        "h2"
+    :name          "test-data"
+    :features      (mapv u/qualified-name (driver.u/features :h2))
+    :timezone      "UTC"}))
 
 (deftest get-field-test
   (testing "GET /api/field/:id"
@@ -245,7 +243,8 @@
                    (mt/boolean-ids-and-timestamps ((mt/user->client :crowberto) :get 200 (format "field/%d/values" field-id))))))[]))
 
       (testing "should be able to unset just the human-readable values"
-        (mt/with-temp FieldValues [{field-value-id :id} {:values                (range 1 5), :field_id field-id
+        (mt/with-temp FieldValues [{field-value-id :id} {:values                (range 1 5)
+                                                         :field_id              field-id
                                                          :human_readable_values ["$" "$$" "$$$" "$$$$"]}]
           (testing "before updating values"
             (is (= {:values [[1 "$"] [2 "$$"] [3 "$$$"] [4 "$$$$"]], :field_id true}

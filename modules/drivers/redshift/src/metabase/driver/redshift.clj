@@ -5,22 +5,18 @@
             [clojure.string :as str]
             [clojure.tools.logging :as log]
             [honeysql.core :as hsql]
-            [metabase
-             [driver :as driver]
-             [public-settings :as pubset]]
+            [metabase.driver :as driver]
             [metabase.driver.common :as driver.common]
-            [metabase.driver.sql-jdbc
-             [connection :as sql-jdbc.conn]
-             [execute :as sql-jdbc.execute]]
+            [metabase.driver.sql-jdbc.connection :as sql-jdbc.conn]
+            [metabase.driver.sql-jdbc.execute :as sql-jdbc.execute]
             [metabase.driver.sql-jdbc.execute.legacy-impl :as legacy]
             [metabase.driver.sql.query-processor :as sql.qp]
             [metabase.mbql.util :as mbql.u]
-            [metabase.query-processor
-             [store :as qp.store]
-             [util :as qputil]]
-            [metabase.util
-             [honeysql-extensions :as hx]
-             [i18n :refer [trs]]])
+            [metabase.public-settings :as pubset]
+            [metabase.query-processor.store :as qp.store]
+            [metabase.query-processor.util :as qputil]
+            [metabase.util.honeysql-extensions :as hx]
+            [metabase.util.i18n :refer [trs]])
   (:import [java.sql ResultSet Types]
            java.time.OffsetTime))
 
@@ -85,6 +81,11 @@
 (defmethod driver/current-db-time :redshift
   [& args]
   (apply driver.common/current-db-time args))
+
+(defmethod driver/db-start-of-week :redshift
+  [_]
+  :sunday)
+
 
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
@@ -169,6 +170,11 @@
  sql-jdbc.execute/read-column-thunk
  [::legacy/use-legacy-classes-for-read-and-set Types/TIMESTAMP]
  [:postgres Types/TIMESTAMP])
+
+(prefer-method
+ sql-jdbc.execute/read-column-thunk
+ [::legacy/use-legacy-classes-for-read-and-set Types/TIME]
+ [:postgres Types/TIME])
 
 (prefer-method
  sql-jdbc.execute/set-parameter

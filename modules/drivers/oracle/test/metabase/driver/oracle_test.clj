@@ -4,28 +4,25 @@
             [clojure.test :refer :all]
             [expectations :refer [expect]]
             [honeysql.core :as hsql]
-            [metabase
-             [driver :as driver]
-             [query-processor :as qp]
-             [query-processor-test :as qp.test]
-             [test :as mt]
-             [util :as u]]
+            [metabase.driver :as driver]
             [metabase.driver.sql-jdbc.connection :as sql-jdbc.conn]
+            [metabase.driver.sql-jdbc.sync :as sql-jdbc.sync]
             [metabase.driver.sql.query-processor :as sql.qp]
             [metabase.driver.util :as driver.u]
-            [metabase.models
-             [field :refer [Field]]
-             [table :refer [Table]]]
+            [metabase.models.field :refer [Field]]
+            [metabase.models.table :refer [Table]]
+            [metabase.query-processor :as qp]
+            [metabase.query-processor-test :as qp.test]
             [metabase.query-processor.test-util :as qp.test-util]
-            [metabase.test
-             [data :as data]
-             [util :as tu]]
-            [metabase.test.data
-             [datasets :as datasets :refer [expect-with-driver]]
-             [oracle :as oracle.tx]
-             [sql :as sql.tx]]
+            [metabase.test :as mt]
+            [metabase.test.data :as data]
+            [metabase.test.data.datasets :as datasets :refer [expect-with-driver]]
+            [metabase.test.data.oracle :as oracle.tx]
+            [metabase.test.data.sql :as sql.tx]
             [metabase.test.data.sql.ddl :as ddl]
+            [metabase.test.util :as tu]
             [metabase.test.util.log :as tu.log]
+            [metabase.util :as u]
             [metabase.util.honeysql-extensions :as hx]
             [toucan.util.test :as tt]))
 
@@ -72,33 +69,32 @@
 
 (deftest test-ssh-connection
   (testing "Gets an error when it can't connect to oracle via ssh tunnel"
-    (mt/test-driver
-     :oracle
-     (is (thrown?
-          java.net.ConnectException
-          (try
-            (let [engine :oracle
-                  details {:ssl            false
-                           :password       "changeme"
-                           :tunnel-host    "localhost"
-                           :tunnel-pass    "BOGUS-BOGUS"
-                           :port           5432
-                           :dbname         "test"
-                           :host           "localhost"
-                           :tunnel-enabled true
-                           ;; we want to use a bogus port here on purpose -
-                           ;; so that locally, it gets a ConnectionRefused,
-                           ;; and in CI it does too. Apache's SSHD library
-                           ;; doesn't wrap every exception in an SshdException
-                           :tunnel-port    21212
-                           :tunnel-user    "bogus"}]
-              (tu.log/suppress-output
-               (driver.u/can-connect-with-details? engine details :throw-exceptions)))
-            (catch Throwable e
-              (loop [^Throwable e e]
-                (or (when (instance? java.net.ConnectException e)
-                      (throw e))
-                    (some-> (.getCause e) recur))))))))))
+    (mt/test-driver :oracle
+      (is (thrown?
+           java.net.ConnectException
+           (try
+             (let [engine :oracle
+                   details {:ssl            false
+                            :password       "changeme"
+                            :tunnel-host    "localhost"
+                            :tunnel-pass    "BOGUS-BOGUS"
+                            :port           5432
+                            :dbname         "test"
+                            :host           "localhost"
+                            :tunnel-enabled true
+                            ;; we want to use a bogus port here on purpose -
+                            ;; so that locally, it gets a ConnectionRefused,
+                            ;; and in CI it does too. Apache's SSHD library
+                            ;; doesn't wrap every exception in an SshdException
+                            :tunnel-port    21212
+                            :tunnel-user    "bogus"}]
+               (tu.log/suppress-output
+                (driver.u/can-connect-with-details? engine details :throw-exceptions)))
+             (catch Throwable e
+               (loop [^Throwable e e]
+                 (or (when (instance? java.net.ConnectException e)
+                       (throw e))
+                     (some-> (.getCause e) recur))))))))))
 
 (expect-with-driver :oracle
   "UTC"
@@ -115,8 +111,8 @@
                                                                                             {:col1 "B", :col2 2}]))
       "Make sure we're generating correct DDL for Oracle to insert all rows at once."))
 
-(defn- do-with-temp-user [f]
-  (let [username (tu/random-name)]
+(defn- do-with-temp-user [username f]
+  (let [username (or username (tu/random-name))]
     (try
       (oracle.tx/create-user! username)
       (f username)
@@ -125,9 +121,10 @@
 
 (defmacro ^:private with-temp-user
   "Run `body` with a temporary user bound, binding their name to `username-binding`. Use this to create the equivalent
-  of temporary one-off databases."
-  [[username-binding] & body]
-  `(do-with-temp-user (fn [~username-binding] ~@body)))
+  of temporary one-off databases. A particular username can be passed in as the binding or else one is generated with
+  `tu/random-name`."
+  [[username-binding & [username]] & body]
+  `(do-with-temp-user ~username (fn [~username-binding] ~@body)))
 
 
 ;; Make sure Oracle CLOBs are returned as text (#9026)
@@ -152,6 +149,23 @@
             :type     :query
             :query    {:source-table (u/get-id table)
                        :order-by     [[:asc [:field-id (u/get-id id-field)]]]}}))))))
+
+(deftest handle-slashes-test
+  (datasets/test-driver :oracle
+    (let [details  (:details (data/db))
+          spec     (sql-jdbc.conn/connection-details->spec :oracle details)
+          execute! (fn [format-string & args]
+                     (jdbc/execute! spec (apply format format-string args)))
+          pk-type  (sql.tx/pk-sql-type :oracle)
+          schema   (str (tu/random-name) "/")]
+      (with-temp-user [username schema]
+        (execute! "CREATE TABLE \"%s\".\"mess/ages/\" (\"id\" %s, \"column1\" varchar(200))" username pk-type)
+        (testing "Sync can handle slashes in the schema and tablenames"
+          (is (= #{"id" "column1"}
+                 (into #{}
+                       (map :name)
+                       (:fields
+                        (sql-jdbc.sync/describe-table :oracle spec {:name "mess/ages/" :schema username}))))))))))
 
 ;; let's make sure we're actually attempting to generate the correctl HoneySQL for joins and source queries so we
 ;; don't sit around scratching our heads wondering why the queries themselves aren't working

@@ -5,44 +5,37 @@
             [clojure.tools.logging :as log]
             [compojure.core :refer [DELETE GET POST PUT]]
             [medley.core :as m]
-            [metabase
-             [events :as events]
-             [public-settings :as public-settings]
-             [query-processor :as qp]
-             [related :as related]
-             [util :as u]]
-            [metabase.api
-             [common :as api]
-             [dataset :as dataset-api]]
+            [metabase.api.common :as api]
+            [metabase.api.dataset :as dataset-api]
             [metabase.async.util :as async.u]
             [metabase.email.messages :as messages]
-            [metabase.models
-             [card :as card :refer [Card]]
-             [card-favorite :refer [CardFavorite]]
-             [collection :as collection :refer [Collection]]
-             [database :refer [Database]]
-             [interface :as mi]
-             [pulse :as pulse :refer [Pulse]]
-             [query :as query]
-             [table :refer [Table]]
-             [view-log :refer [ViewLog]]]
+            [metabase.events :as events]
+            [metabase.models.card :as card :refer [Card]]
+            [metabase.models.card-favorite :refer [CardFavorite]]
+            [metabase.models.collection :as collection :refer [Collection]]
+            [metabase.models.database :refer [Database]]
+            [metabase.models.interface :as mi]
+            [metabase.models.pulse :as pulse :refer [Pulse]]
+            [metabase.models.query :as query]
             [metabase.models.query.permissions :as query-perms]
-            [metabase.query-processor
-             [async :as qp.async]
-             [streaming :as qp.streaming]
-             [util :as qputil]]
-            [metabase.query-processor.middleware
-             [cache :as cache]
-             [constraints :as constraints]
-             [results-metadata :as results-metadata]]
+            [metabase.models.table :refer [Table]]
+            [metabase.models.view-log :refer [ViewLog]]
+            [metabase.public-settings :as public-settings]
+            [metabase.query-processor :as qp]
+            [metabase.query-processor.async :as qp.async]
+            [metabase.query-processor.middleware.cache :as cache]
+            [metabase.query-processor.middleware.constraints :as constraints]
+            [metabase.query-processor.middleware.results-metadata :as results-metadata]
+            [metabase.query-processor.streaming :as qp.streaming]
+            [metabase.query-processor.util :as qputil]
+            [metabase.related :as related]
             [metabase.sync.analyze.query-results :as qr]
-            [metabase.util
-             [i18n :refer [trs tru]]
-             [schema :as su]]
+            [metabase.util :as u]
+            [metabase.util.i18n :refer [trs tru]]
+            [metabase.util.schema :as su]
             [schema.core :as s]
-            [toucan
-             [db :as db]
-             [hydrate :refer [hydrate]]])
+            [toucan.db :as db]
+            [toucan.hydrate :refer [hydrate]])
   (:import clojure.core.async.impl.channels.ManyToManyChannel
            java.util.UUID
            metabase.models.card.CardInstance))
@@ -523,7 +516,6 @@
           (reverse (range starting-position (+ (count sorted-cards) starting-position)))
           (reverse sorted-cards)))))
 
-
 (defn- move-cards-to-collection! [new-collection-id-or-nil card-ids]
   ;; if moving to a collection, make sure we have write perms for it
   (when new-collection-id-or-nil
@@ -584,7 +576,10 @@
                   (u/emoji "💾"))
         ttl-seconds))))
 
-(defn- query-for-card [{query :dataset_query, :as card} parameters constraints middleware]
+(defn query-for-card
+  "Generate a query for a saved Card"
+  [{query :dataset_query
+    :as   card} parameters constraints middleware]
   (let [query (-> query
                   ;; don't want default constraints overridding anything that's already there
                   (m/dissoc-in [:middleware :add-default-userland-constraints?])
@@ -640,7 +635,9 @@
      :parameters  (json/parse-string parameters keyword)
      :constraints nil
      :context     (dataset-api/export-format->context export-format)
-     :middleware  {:skip-results-metadata? true})))
+     :middleware  {:skip-results-metadata? true
+                   :format-rows?           false
+                   :js-int-to-string?      false})))
 
 
 ;;; ----------------------------------------------- Sharing is Caring ------------------------------------------------

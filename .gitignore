@@ -8,6 +8,7 @@
 *.xcworkspacedata
 .DS_Store
 .\#*
+.cpcache/
 .eastwood
 .idea/
 .nrepl-port
@@ -77,3 +78,6 @@ bin/node_modules/
 *.trace.db
 /backend-checksums.txt
 .vscode
+dev/src/dev/nocommit/
+*~
+**/cypress_sample_dataset.json

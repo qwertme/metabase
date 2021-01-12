@@ -1,31 +1,26 @@
 (ns metabase.driver.snowflake
   "Snowflake Driver."
-  (:require [clojure
-             [set :as set]
-             [string :as str]]
-            [clojure.java.jdbc :as jdbc]
+  (:require [clojure.java.jdbc :as jdbc]
+            [clojure.set :as set]
+            [clojure.string :as str]
             [clojure.tools.logging :as log]
             [honeysql.core :as hsql]
             [java-time :as t]
-            [metabase
-             [driver :as driver]
-             [util :as u]]
-            [metabase.driver
-             [common :as driver.common]
-             [sql-jdbc :as sql-jdbc]]
-            [metabase.driver.sql-jdbc
-             [common :as sql-jdbc.common]
-             [connection :as sql-jdbc.conn]
-             [execute :as sql-jdbc.execute]
-             [sync :as sql-jdbc.sync]]
+            [metabase.driver :as driver]
+            [metabase.driver.common :as driver.common]
+            [metabase.driver.sql-jdbc :as sql-jdbc]
+            [metabase.driver.sql-jdbc.common :as sql-jdbc.common]
+            [metabase.driver.sql-jdbc.connection :as sql-jdbc.conn]
+            [metabase.driver.sql-jdbc.execute :as sql-jdbc.execute]
             [metabase.driver.sql-jdbc.execute.legacy-impl :as legacy]
+            [metabase.driver.sql-jdbc.sync :as sql-jdbc.sync]
             [metabase.driver.sql.query-processor :as sql.qp]
             [metabase.driver.sql.util.unprepare :as unprepare]
             [metabase.query-processor.store :as qp.store]
-            [metabase.util
-             [date-2 :as u.date]
-             [honeysql-extensions :as hx]
-             [i18n :refer [tru]]])
+            [metabase.util :as u]
+            [metabase.util.date-2 :as u.date]
+            [metabase.util.honeysql-extensions :as hx]
+            [metabase.util.i18n :refer [trs tru]])
   (:import [java.sql ResultSet Types]
            [java.time OffsetDateTime ZonedDateTime]
            metabase.util.honeysql_extensions.Identifier))
@@ -41,6 +36,10 @@
 
     #"(?s).*" ; default - the Snowflake errors have a \n in them
     message))
+
+(defmethod driver/db-start-of-week :snowflake
+  [_]
+  :sunday)
 
 (defmethod sql-jdbc.conn/connection-details->spec :snowflake
   [_ {:keys [account regionid], :as opts}]
@@ -96,6 +95,7 @@
     :CHARACTER                  :type/Text
     :STRING                     :type/Text
     :TEXT                       :type/Text
+    :GEOGRAPHY                  :type/SerializedJSON
     :BINARY                     :type/*
     :VARBINARY                  :type/*
     :BOOLEAN                    :type/Boolean
@@ -113,6 +113,7 @@
 
 (defmethod sql.qp/unix-timestamp->honeysql [:snowflake :seconds]      [_ _ expr] (hsql/call :to_timestamp expr))
 (defmethod sql.qp/unix-timestamp->honeysql [:snowflake :milliseconds] [_ _ expr] (hsql/call :to_timestamp expr 3))
+(defmethod sql.qp/unix-timestamp->honeysql [:snowflake :microseconds] [_ _ expr] (hsql/call :to_timestamp expr 6))
 
 (defmethod sql.qp/current-datetime-honeysql-form :snowflake
   [_]
@@ -134,17 +135,21 @@
 (defmethod sql.qp/date [:snowflake :hour]            [_ _ expr] (date-trunc :hour expr))
 (defmethod sql.qp/date [:snowflake :hour-of-day]     [_ _ expr] (extract :hour expr))
 (defmethod sql.qp/date [:snowflake :day]             [_ _ expr] (date-trunc :day expr))
-(defmethod sql.qp/date [:snowflake :day-of-week]     [_ _ expr] (extract :dayofweek expr))
 (defmethod sql.qp/date [:snowflake :day-of-month]    [_ _ expr] (extract :day expr))
 (defmethod sql.qp/date [:snowflake :day-of-year]     [_ _ expr] (extract :dayofyear expr))
-(defmethod sql.qp/date [:snowflake :week]            [_ _ expr] (date-trunc :week expr))
-(defmethod sql.qp/date [:snowflake :week-of-year]    [_ _ expr] (extract :week expr))
 (defmethod sql.qp/date [:snowflake :month]           [_ _ expr] (date-trunc :month expr))
 (defmethod sql.qp/date [:snowflake :month-of-year]   [_ _ expr] (extract :month expr))
 (defmethod sql.qp/date [:snowflake :quarter]         [_ _ expr] (date-trunc :quarter expr))
 (defmethod sql.qp/date [:snowflake :quarter-of-year] [_ _ expr] (extract :quarter expr))
 (defmethod sql.qp/date [:snowflake :year]            [_ _ expr] (date-trunc :year expr))
 
+(defmethod sql.qp/date [:snowflake :week]
+  [_ _ expr]
+  (sql.qp/adjust-start-of-week :snowflake (partial date-trunc :week) expr))
+
+(defmethod sql.qp/date [:snowflake :day-of-week]
+  [_ _ expr]
+  (sql.qp/adjust-day-of-week :snowflake (extract :dayofweek expr)))
 
 (defmethod sql.qp/->honeysql [:snowflake :regex-match-first]
   [driver [_ arg pattern]]
@@ -236,21 +241,33 @@
   ;; returns nothing
   (let [db-name          (db-name database)
         excluded-schemas (set (sql-jdbc.sync/excluded-schemas driver))]
-    {:tables (set (for [table (jdbc/query
-                               (sql-jdbc.conn/db->pooled-connection-spec database)
-                               (format "SHOW OBJECTS IN DATABASE \"%s\"" db-name))
-                        :when (not (contains? excluded-schemas (:schema_name table)))]
-                    {:name        (:name table)
-                     :schema      (:schema_name table)
-                     :description (not-empty (:comment table))}))}))
+    (qp.store/with-store
+      (qp.store/fetch-and-store-database! (u/get-id database))
+      (let [spec (sql-jdbc.conn/db->pooled-connection-spec database)
+            sql  (format "SHOW OBJECTS IN DATABASE \"%s\"" db-name)]
+        (with-open [conn (jdbc/get-connection spec)]
+          {:tables (into
+                    #{}
+                    (comp (filter (fn [{schema :schema_name, table-name :name}]
+                                    (and (not (contains? excluded-schemas schema))
+                                         (sql-jdbc.sync/have-select-privilege? driver conn schema table-name))))
+                          (map (fn [{schema :schema_name, table-name :name, remark :comment}]
+                                 {:name        table-name
+                                  :schema      schema
+                                  :description (not-empty remark)})))
+                    (try
+                      (jdbc/reducible-query {:connection conn} sql)
+                      (catch Throwable e
+                        (throw (ex-info (trs "Error executing query") {:sql sql} e)))))})))))
 
 (defmethod driver/describe-table :snowflake
   [driver database table]
-  (jdbc/with-db-metadata [metadata (sql-jdbc.conn/db->pooled-connection-spec database)]
-    (->> (assoc (select-keys table [:name :schema])
-                :fields (sql-jdbc.sync/describe-table-fields metadata driver table (db-name database)))
-         ;; find PKs and mark them
-         (sql-jdbc.sync/add-table-pks metadata))))
+  (let [spec (sql-jdbc.conn/db->pooled-connection-spec database)]
+    (with-open [conn (jdbc/get-connection spec)]
+      (->> (assoc (select-keys table [:name :schema])
+                  :fields (sql-jdbc.sync/describe-table-fields driver conn table (db-name database)))
+           ;; find PKs and mark them
+           (sql-jdbc.sync/add-table-pks (.getMetaData conn))))))
 
 (defmethod driver/describe-table-fks :snowflake
   [driver database table]

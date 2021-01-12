@@ -5,10 +5,9 @@
             [metabase.mbql.schema :as mbql.s]
             [metabase.models.params :as params]
             [metabase.query-processor.error-type :as error-type]
-            [metabase.util
-             [date-2 :as u.date]
-             [i18n :refer [tru]]
-             [schema :as su]]
+            [metabase.util.date-2 :as u.date]
+            [metabase.util.i18n :refer [tru]]
+            [metabase.util.schema :as su]
             [schema.core :as s])
   (:import java.time.temporal.Temporal))
 
@@ -280,5 +279,5 @@
 (s/defn date-string->filter :- mbql.s/Filter
   "Takes a string description of a *date* (not datetime) range such as 'lastmonth' or '2016-07-15~2016-08-6' and
    returns a corresponding MBQL filter clause for a given field reference."
-  [date-string :- s/Str, field :- (s/cond-pre su/IntGreaterThanZero mbql.s/Field)]
+  [date-string :- s/Str field :- (s/cond-pre su/IntGreaterThanZero mbql.s/Field)]
   (execute-decoders all-date-string-decoders :filter (params/wrap-field-id-if-needed field) date-string))

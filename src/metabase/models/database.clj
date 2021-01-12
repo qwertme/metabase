@@ -1,21 +1,19 @@
 (ns metabase.models.database
   (:require [cheshire.generate :refer [add-encoder encode-map]]
             [clojure.tools.logging :as log]
-            [metabase
-             [db :as mdb]
-             [driver :as driver]
-             [util :as u]]
+            [medley.core :as m]
             [metabase.api.common :refer [*current-user*]]
+            [metabase.db.util :as mdb.u]
+            [metabase.driver :as driver]
             [metabase.driver.util :as driver.u]
-            [metabase.models
-             [interface :as i]
-             [permissions :as perms]
-             [permissions-group :as perm-group]]
+            [metabase.models.interface :as i]
+            [metabase.models.permissions :as perms]
+            [metabase.models.permissions-group :as perm-group]
             [metabase.plugins.classloader :as classloader]
+            [metabase.util :as u]
             [metabase.util.i18n :refer [trs]]
-            [toucan
-             [db :as db]
-             [models :as models]]))
+            [toucan.db :as db]
+            [toucan.models :as models]))
 
 ;;; ----------------------------------------------- Entity & Lifecycle -----------------------------------------------
 
@@ -103,7 +101,8 @@
                                        :options                     :json
                                        :engine                      :keyword
                                        :metadata_sync_schedule      :cron-string
-                                       :cache_field_values_schedule :cron-string})
+                                       :cache_field_values_schedule :cron-string
+                                       :start_of_week               :keyword})
           :properties     (constantly {:timestamped? true})
           :post-insert    post-insert
           :post-select    post-select
@@ -137,7 +136,7 @@
   [{:keys [id]}]
   (let [table-ids (db/select-ids 'Table, :db_id id, :active true)]
     (when (seq table-ids)
-      (db/select 'Field, :table_id [:in table-ids], :special_type (mdb/isa :type/PK)))))
+      (db/select 'Field, :table_id [:in table-ids], :special_type (mdb.u/isa :type/PK)))))
 
 (defn schema-exists?
   "Does `database` have any tables with `schema`?"
@@ -151,15 +150,22 @@
   "The string to replace passwords with when serializing Databases."
   "**MetabasePass**")
 
+(def ^:const sensitive-fields
+  "List of fields that should be obfuscated in API responses, as they contain sensitive data."
+  [:password :pass :tunnel-pass :tunnel-private-key :tunnel-private-key-passphrase
+   :access-token :refresh-token :service-account-json])
+
 ;; when encoding a Database as JSON remove the `details` for any non-admin User. For admin users they can still see
-;; the `details` but remove the password. No one gets to see this in an API response!
+;; the `details` but remove anything resembling a password. No one gets to see this in an API response!
 (add-encoder
  DatabaseInstance
  (fn [db json-generator]
    (encode-map
-    (cond
-      (not (:is_superuser @*current-user*)) (dissoc db :details)
-      (get-in db [:details :password])      (assoc-in db [:details :password] protected-password)
-      (get-in db [:details :pass])          (assoc-in db [:details :pass] protected-password) ; MongoDB uses "pass" instead of password
-      :else                                 db)
+    (if (not (:is_superuser @*current-user*))
+      (dissoc db :details)
+      (update db :details (fn [details]
+                            (reduce
+                             #(m/update-existing %1 %2 (constantly protected-password))
+                             details
+                             sensitive-fields))))
     json-generator)))

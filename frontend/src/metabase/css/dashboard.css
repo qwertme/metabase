@@ -117,23 +117,6 @@
   pointer-events: none;
   transition: border 0.3s, background-color 0.3s;
 }
-.Dash--editing.Dash--editingParameter .DashCard .Card {
-  pointer-events: auto;
-}
-
-@keyframes fade-out-yellow {
-  from {
-    background-color: var(--color-bg-white);
-  }
-  to {
-    background-color: var(--color-bg-white);
-  }
-}
-
-.Dash--editing .DashCard .Card.Card--recent {
-  animation-duration: 30s;
-  animation-name: fade-out-yellow;
-}
 
 .Dash--editing .DashCard:hover .Card .Card-heading {
   z-index: 2;
@@ -170,6 +153,8 @@
 
 .DashCard .Card {
   box-shadow: 0px 1px 3px var(--color-shadow);
+  border-color: transparent;
+  border-radius: 8px;
 }
 
 .Dash--editing .DashCard.dragging .Card {

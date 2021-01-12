@@ -3,15 +3,14 @@
   multimethods for SQL JDBC drivers."
   (:require [clojure.java.jdbc :as jdbc]
             [clojure.tools.logging :as log]
-            [metabase
-             [config :as config]
-             [connection-pool :as connection-pool]
-             [driver :as driver]
-             [util :as u]]
+            [metabase.config :as config]
+            [metabase.connection-pool :as connection-pool]
+            [metabase.driver :as driver]
             [metabase.models.database :refer [Database]]
-            [metabase.util
-             [i18n :refer [trs]]
-             [ssh :as ssh]]
+            [metabase.query-processor.error-type :as qp.error-type]
+            [metabase.util :as u]
+            [metabase.util.i18n :refer [trs tru]]
+            [metabase.util.ssh :as ssh]
             [toucan.db :as db]))
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
@@ -104,7 +103,9 @@
   more than one pool is ever open for a single database."
   [database-id pool-spec-or-nil]
   {:pre [(integer? database-id)]}
-  (let [[old-id->pool] (swap-vals! database-id->connection-pool assoc database-id pool-spec-or-nil)]
+  (let [[old-id->pool] (if pool-spec-or-nil
+                         (swap-vals! database-id->connection-pool assoc database-id pool-spec-or-nil)
+                         (swap-vals! database-id->connection-pool dissoc database-id))]
     ;; if we replaced a different pool with the new pool that is different from the old one, destroy the old pool
     (when-let [old-pool-spec (get old-id->pool database-id)]
       (when-not (identical? old-pool-spec pool-spec-or-nil)
@@ -121,23 +122,40 @@
 (defn db->pooled-connection-spec
   "Return a JDBC connection spec that includes a cp30 `ComboPooledDataSource`. These connection pools are cached so we
   don't create multiple ones for the same DB."
-  [database-or-id]
-  (let [database-id (u/get-id database-or-id)]
-    (or
-     ;; we have an existing pool for this database, so use it
-     (get @database-id->connection-pool database-id)
-     ;; Even tho `set-pool!` will properly shut down old pools if two threads call this method at the same time, we
-     ;; don't want to end up with a bunch of simultaneous threads creating pools only to have them destroyed the very
-     ;; next instant. This will cause their queries to fail. Thus we should do the usual locking here and make sure only
-     ;; one thread will be creating a pool at a given instant.
-     (locking database-id->connection-pool
-       (or
-        ;; check if another thread created the pool while we were waiting to acquire the lock
-        (get @database-id->connection-pool database-id)
-        ;; create a new pool and add it to our cache, then return it
-        (let [db (db/select-one [Database :id :engine :details] :id database-id)]
-          (u/prog1 (create-pool! db)
-            (set-pool! database-id <>))))))))
+  [db-or-id-or-spec]
+  (cond
+    ;; db-or-id-or-spec is a Database instance or an integer ID
+    (u/id db-or-id-or-spec)
+    (let [database-id (u/get-id db-or-id-or-spec)]
+      (or
+       ;; we have an existing pool for this database, so use it
+       (get @database-id->connection-pool database-id)
+       ;; Even tho `set-pool!` will properly shut down old pools if two threads call this method at the same time, we
+       ;; don't want to end up with a bunch of simultaneous threads creating pools only to have them destroyed the
+       ;; very next instant. This will cause their queries to fail. Thus we should do the usual locking here and make
+       ;; sure only one thread will be creating a pool at a given instant.
+       (locking database-id->connection-pool
+         (or
+          ;; check if another thread created the pool while we were waiting to acquire the lock
+          (get @database-id->connection-pool database-id)
+          ;; create a new pool and add it to our cache, then return it
+          (let [db (or (db/select-one [Database :id :engine :details] :id database-id)
+                       (throw (ex-info (tru "Database {0} does not exist." database-id)
+                                       {:status-code 404
+                                        :type        qp.error-type/invalid-query
+                                        :database-id database-id})))]
+            (u/prog1 (create-pool! db)
+              (set-pool! database-id <>)))))))
+
+    ;; already a `clojure.java.jdbc` spec map
+    (map? db-or-id-or-spec)
+    db-or-id-or-spec
+
+    ;; invalid. Throw Exception
+    :else
+    (throw (ex-info (tru "Not a valid Database/Database ID/JDBC spec")
+                    ;; don't log the actual spec lest we accidentally expose credentials
+                    {:input (class db-or-id-or-spec)}))))
 
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
@@ -151,11 +169,15 @@
   (let [details-with-tunnel (ssh/include-ssh-tunnel details)]
     (connection-details->spec driver details-with-tunnel)))
 
+(defn can-connect-with-spec?
+  "Can we connect to a JDBC database with `clojure.java.jdbc` `jdbc-spec` and run a simple query?"
+  [jdbc-spec]
+  (let [[first-row] (jdbc/query jdbc-spec ["SELECT 1"])
+        [result]    (vals first-row)]
+    (= 1 result)))
+
 (defn can-connect?
   "Default implementation of `driver/can-connect?` for SQL JDBC drivers. Checks whether we can perform a simple `SELECT
   1` query."
   [driver details]
-  (let [spec        (details->connection-spec-for-testing-connection driver details)
-        [first-row] (jdbc/query spec ["SELECT 1"])
-        [result]    (vals first-row)]
-    (= 1 result)))
+  (can-connect-with-spec? (details->connection-spec-for-testing-connection driver details)))

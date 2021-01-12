@@ -30,26 +30,22 @@
       (setting/all)"
   (:refer-clojure :exclude [get])
   (:require [cheshire.core :as json]
-            [clojure
-             [core :as core]
-             [data :as data]
-             [string :as str]]
+            [clojure.core :as core]
+            [clojure.data :as data]
             [clojure.data.csv :as csv]
+            [clojure.string :as str]
             [clojure.tools.logging :as log]
             [environ.core :as env]
             [medley.core :as m]
-            [metabase
-             [events :as events]
-             [util :as u]]
+            [metabase.events :as events]
             [metabase.models.setting.cache :as cache]
-            [metabase.util
-             [date-2 :as u.date]
-             [i18n :as ui18n :refer [deferred-trs deferred-tru trs tru]]]
+            [metabase.util :as u]
+            [metabase.util.date-2 :as u.date]
+            [metabase.util.i18n :as ui18n :refer [deferred-trs deferred-tru trs tru]]
             [schema.core :as s]
-            [toucan
-             [db :as db]
-             [models :as models]])
-  (:import clojure.lang.Symbol
+            [toucan.db :as db]
+            [toucan.models :as models])
+  (:import [clojure.lang Keyword Symbol]
            java.io.StringWriter))
 
 (models/defmodel Setting
@@ -63,7 +59,7 @@
 
 
 (def ^:private Type
-  (s/enum :string :boolean :json :integer :double :timestamp :csv))
+  (s/enum :string :boolean :json :integer :double :timestamp :csv :keyword))
 
 (def ^:private Visibility
   (s/enum :public :authenticated :admin :internal))
@@ -75,7 +71,8 @@
    :boolean   `Boolean
    :integer   `Long
    :double    `Double
-   :timestamp 'java.time.temporal.Temporal})
+   :timestamp 'java.time.temporal.Temporal
+   :keyword   'Keyword})
 
 (def ^:private SettingDefinition
   {:name        s/Keyword
@@ -221,6 +218,11 @@
   ^Double [setting-definition-or-name]
   (some-> (get-string setting-definition-or-name) Double/parseDouble))
 
+(defn get-keyword
+  "Get value of (presumably `:string`) `setting-definition-or-name` as keyword. This is the default getter for `:keyword` settings."
+  ^clojure.lang.Keyword [setting-definition-or-name]
+  (some-> setting-definition-or-name get-string keyword))
+
 (defn get-json
   "Get the string value of `setting-definition-or-name` and parse it as JSON."
   [setting-definition-or-name]
@@ -240,6 +242,7 @@
   {:string    get-string
    :boolean   get-boolean
    :integer   get-integer
+   :keyword   get-keyword
    :json      get-json
    :timestamp get-timestamp
    :double    get-double
@@ -395,6 +398,7 @@
 
 (def ^:private default-setter-for-type
   {:string    set-string!
+   :keyword   set-string!
    :boolean   set-boolean!
    :integer   set-integer!
    :json      set-json!
@@ -444,7 +448,6 @@
               (dissoc setting :name :type :default)))
     (s/validate SettingDefinition <>)
     (swap! registered-settings assoc setting-name <>)))
-
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                                defsetting macro                                                |

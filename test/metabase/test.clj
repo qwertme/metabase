@@ -3,37 +3,34 @@
 
   (Prefer using `metabase.test` to requiring bits and pieces from these various namespaces going forward, since it
   reduces the cognitive load required to write tests.)"
-  (:require [clojure
-             data
-             [test :refer :all]
-             [walk :as walk]]
+  (:require clojure.data
+            [clojure.test :refer :all]
+            [clojure.tools.macro :as tools.macro]
+            [clojure.walk :as walk]
             [java-time :as t]
             [medley.core :as m]
-            [metabase
-             [driver :as driver]
-             [email-test :as et]
-             [http-client :as http]
-             [query-processor :as qp]
-             [query-processor-test :as qp.test]]
+            [metabase.driver :as driver]
             [metabase.driver.sql-jdbc.test-util :as sql-jdbc.tu]
-            [metabase.query-processor
-             [context :as qp.context]
-             [reducible :as qp.reducible]
-             [test-util :as qp.test-util]]
-            [metabase.test
-             [data :as data]
-             [initialize :as initialize]
-             [util :as tu]]
-            [metabase.test.data
-             [datasets :as datasets]
-             [env :as tx.env]
-             [interface :as tx]
-             [users :as test-users]]
-            [metabase.test.util
-             [async :as tu.async]
-             [i18n :as i18n.tu]
-             [log :as tu.log]
-             [timezone :as tu.tz]]
+            [metabase.email-test :as et]
+            [metabase.http-client :as http]
+            [metabase.plugins.classloader :as classloader]
+            [metabase.query-processor :as qp]
+            [metabase.query-processor-test :as qp.test]
+            [metabase.query-processor.context :as qp.context]
+            [metabase.query-processor.reducible :as qp.reducible]
+            [metabase.query-processor.test-util :as qp.test-util]
+            [metabase.test.data :as data]
+            [metabase.test.data.datasets :as datasets]
+            [metabase.test.data.env :as tx.env]
+            [metabase.test.data.interface :as tx]
+            [metabase.test.data.users :as test-users]
+            [metabase.test.initialize :as initialize]
+            [metabase.test.util :as tu]
+            [metabase.test.util.async :as tu.async]
+            [metabase.test.util.i18n :as i18n.tu]
+            [metabase.test.util.log :as tu.log]
+            [metabase.test.util.timezone :as tu.tz]
+            [metabase.util :as u]
             [potemkin :as p]
             [toucan.db :as db]
             [toucan.util.test :as tt]))
@@ -48,6 +45,7 @@
   http/keep-me
   i18n.tu/keep-me
   initialize/keep-me
+  mt.tu/keep-me
   qp/keep-me
   qp.test-util/keep-me
   qp.test/keep-me
@@ -74,8 +72,7 @@
   query
   run-mbql-query
   with-db
-  with-temp-copy-of-db
-  with-temp-objects]
+  with-temp-copy-of-db]
 
  [datasets
   test-driver
@@ -139,9 +136,10 @@
  [test-users
   fetch-user
   test-user?
-  user->id
   user->client
   user->credentials
+  user->id
+  user-http-request
   with-test-user]
 
  [tt
@@ -154,7 +152,6 @@
   discard-setting-changes
   doall-recursive
   is-uuid-string?
-  metabase-logger
   obj->json->obj
   postwalk-pred
   random-email
@@ -162,11 +159,13 @@
   round-all-decimals
   scheduler-current-tasks
   throw-if-called
+  with-discarded-collections-perms-changes
   with-locale
+  with-log-level
   with-log-messages
   with-log-messages-for-level
-  with-log-level
   with-model-cleanup
+  with-non-admin-groups-no-root-collection-for-namespace-perms
   with-non-admin-groups-no-root-collection-perms
   with-scheduler
   with-temp-scheduler
@@ -179,7 +178,10 @@
   with-open-channels]
 
  [tu.log
-  suppress-output]
+  suppress-output
+  with-log-messages
+  with-log-messages-for-level
+  with-log-level]
 
  [tu.tz
   with-system-timezone-id]
@@ -202,6 +204,11 @@
  [tx.env
   set-test-drivers!
   with-test-drivers])
+
+;; ee-only stuff
+(u/ignore-exceptions
+  (classloader/require 'metabase-enterprise.sandbox.test-util)
+  (eval '(potemkin/import-vars [metabase-enterprise.sandbox.test-util with-gtaps])))
 
 ;; TODO -- move this stuff into some other namespace and refer to it here
 
@@ -306,3 +313,24 @@
    (fn [toucan-model]
      (initialize/initialize-if-needed! :db)
      (db/resolve-model toucan-model))))
+
+(defn are+-message [expr arglist args]
+  (pr-str
+   (second
+    (macroexpand-1
+     (list
+      `tools.macro/symbol-macrolet
+      (vec (apply concat (map-indexed (fn [i arg]
+                                        [arg (nth args i)])
+                                      arglist)))
+      expr)))))
+
+(defmacro are+
+  "Like `clojure.test/are` but includes a message for easier test failure debugging. (Also this is somewhat more
+  efficient since it generates far less code ­ it uses `doseq` rather than repeating the entire test each time.)"
+  {:style/indent 2}
+  [argv expr & args]
+  `(doseq [args# ~(mapv vec (partition (count argv) args))
+           :let [~argv args#]]
+     (is ~expr
+         (are+-message '~expr '~argv args#))))

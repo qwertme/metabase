@@ -1,13 +1,11 @@
 (ns metabase.automagic-dashboards.filters
-  (:require [metabase.mbql
-             [normalize :as normalize]
-             [util :as mbql.u]]
+  (:require [metabase.mbql.normalize :as normalize]
+            [metabase.mbql.util :as mbql.u]
             [metabase.models.field :as field :refer [Field]]
             [metabase.query-processor.util :as qp.util]
             [metabase.util :as u]
-            [metabase.util
-             [date-2 :as u.date]
-             [schema :as su]]
+            [metabase.util.date-2 :as u.date]
+            [metabase.util.schema :as su]
             [schema.core :as s]
             [toucan.db :as db]))
 
@@ -17,7 +15,7 @@
           "head")
    (s/cond-pre s/Int su/KeywordOrString (s/recursive #'FieldReference))])
 
-(def ^:private ^{:arglists '([form])} field-reference?
+(def ^{:arglists '([form])} field-reference?
   "Is given form an MBQL field reference?"
   (complement (s/checker FieldReference)))
 

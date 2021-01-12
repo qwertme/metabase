@@ -2,22 +2,18 @@
   "Middleware that creates corresponding `:joins` for Tables referred to by `:fk->` clauses and replaces those clauses
   with `:joined-field` clauses."
   (:refer-clojure :exclude [alias])
-  (:require [metabase
-             [db :as mdb]
-             [driver :as driver]
-             [util :as u]]
-            [metabase.mbql
-             [schema :as mbql.s]
-             [util :as mbql.u]]
-            [metabase.models
-             [field :refer [Field]]
-             [table :refer [Table]]]
-            [metabase.query-processor
-             [error-type :as error-type]
-             [store :as qp.store]]
-            [metabase.util
-             [i18n :refer [tru]]
-             [schema :as su]]
+  (:require [medley.core :as m]
+            [metabase.db.util :as mdb.u]
+            [metabase.driver :as driver]
+            [metabase.mbql.schema :as mbql.s]
+            [metabase.mbql.util :as mbql.u]
+            [metabase.models.field :refer [Field]]
+            [metabase.models.table :refer [Table]]
+            [metabase.query-processor.error-type :as error-type]
+            [metabase.query-processor.store :as qp.store]
+            [metabase.util :as u]
+            [metabase.util.i18n :refer [tru]]
+            [metabase.util.schema :as su]
             [schema.core :as s]
             [toucan.db :as db]))
 
@@ -52,7 +48,7 @@
                            :where     [:and
                                        [:in :source-fk.id (set fk-field-ids)]
                                        [:= :target-table.db_id (u/get-id (qp.store/database))]
-                                       (mdb/isa :source-fk.special_type :type/FK)]})]
+                                       (mdb.u/isa :source-fk.special_type :type/FK)]})]
       (for [{:keys [fk-name table-name], :as info} infos]
         (assoc info :alias (join-alias table-name fk-name))))))
 
@@ -158,17 +154,20 @@
 
 (s/defn ^:private add-joins :- mbql.s/MBQLQuery
   "Add `:joins` to a `query` by converting `join-infos` to the appropriate format."
-  [query, join-infos :- [JoinInfo]]
-  (let [joins (distinct
-               (for [{:keys [fk-id pk-id table-id alias]} join-infos]
-                 {:source-table table-id
-                  :alias        alias
-                  :fields       :none
-                  :strategy     :left-join
-                  :fk-field-id  fk-id
-                  :condition    [:= [:field-id fk-id] [:joined-field alias [:field-id pk-id]]]}))]
-    (cond-> query
-      (seq joins) (update :joins #(mbql.u/deduplicate-join-aliases (concat % joins))))))
+  [{:keys [joins] :as query}, join-infos :- [JoinInfo]]
+  (if (seq join-infos)
+    (assoc query :joins (->> (for [{:keys [fk-id pk-id table-id alias]} join-infos]
+                               {:source-table table-id
+                                :alias        alias
+                                :fields       :none
+                                :strategy     :left-join
+                                :fk-field-id  fk-id
+                                :condition    [:= [:field-id fk-id]
+                                               [:joined-field alias [:field-id pk-id]]]})
+                             (concat joins)
+                             (m/distinct-by #(select-keys % [:source-table :alias :strategy :fk-field-id :condition]))
+                             mbql.u/deduplicate-join-aliases))
+    query))
 
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
@@ -205,19 +204,24 @@
    (resolve-fk-clauses query (default-context query)))
 
   ([form context]
-   (mbql.u/replace form
-     (query :guard (every-pred can-add-joins-here? (complement ::recursive?)))
-     (let [joins     (atom [])
-           add-join! (partial swap! joins conj)]
-       (-> (recursive-resolve query (assoc context :add-join! add-join!))
-           (add-joins @joins)))
+   (-> form
+       (mbql.u/replace
+           (query :guard (every-pred can-add-joins-here? (complement ::recursive?)))
+         (let [joins     (atom [])
+               add-join! (partial swap! joins conj)]
+           (-> (recursive-resolve query (assoc context :add-join! add-join!))
+               (add-joins @joins)))
 
-     ;; join with an alias
-     (join-clause :guard (every-pred join? (complement ::recursive?)))
-     (recursive-resolve join-clause (assoc context :current-alias (:alias join-clause)))
+         ;; join with an alias
+         (join-clause :guard (every-pred join? (complement ::recursive?)))
+         (recursive-resolve join-clause (assoc context :current-alias (:alias join-clause)))
 
-     :fk->
-     (resolve-fk context &match))))
+         :fk->
+         (resolve-fk context &match))
+       (m/update-existing :fields (fn [fields]
+                                    (if (keyword? fields)
+                                      fields
+                                      (-> fields distinct vec)))))))
 
 
 ;;; +----------------------------------------------------------------------------------------------------------------+

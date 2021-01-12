@@ -7,20 +7,17 @@
             [clojure.tools.logging :as log]
             [java-time :as t]
             [medley.core :as m]
-            [metabase
-             [driver :as driver]
-             [events :as events]
-             [util :as u]]
+            [metabase.driver :as driver]
             [metabase.driver.util :as driver.u]
-            [metabase.models
-             [table :refer [Table]]
-             [task-history :refer [TaskHistory]]]
+            [metabase.events :as events]
+            [metabase.models.table :refer [Table]]
+            [metabase.models.task-history :refer [TaskHistory]]
             [metabase.query-processor.interface :as qpi]
             [metabase.sync.interface :as i]
-            [metabase.util
-             [date-2 :as u.date]
-             [i18n :refer [trs]]
-             [schema :as su]]
+            [metabase.util :as u]
+            [metabase.util.date-2 :as u.date]
+            [metabase.util.i18n :refer [trs]]
+            [metabase.util.schema :as su]
             [ring.util.codec :as codec]
             [schema.core :as s]
             [taoensso.nippy :as nippy]
@@ -85,13 +82,13 @@
      (let [start-time    (System/nanoTime)
            tracking-hash (str (java.util.UUID/randomUUID))]
        (events/publish-event! begin-event-name {:database_id (u/get-id database-or-id), :custom_id tracking-hash})
-       (f)
-       (let [total-time-ms (int (/ (- (System/nanoTime) start-time)
+       (let [return        (f)
+             total-time-ms (int (/ (- (System/nanoTime) start-time)
                                    1000000.0))]
          (events/publish-event! end-event-name {:database_id  (u/get-id database-or-id)
                                                 :custom_id    tracking-hash
-                                                :running_time total-time-ms}))
-       nil))))
+                                                :running_time total-time-ms})
+         return)))))
 
 (defn- with-start-and-finish-logging*
   "Logs start/finish messages using `log-fn`, timing `f`"
@@ -433,7 +430,8 @@
                        :end-time   end-time
                        :steps      step-metadata}]
     (store-sync-summary! operation database sync-metadata)
-    (log-sync-summary operation database sync-metadata)))
+    (log-sync-summary operation database sync-metadata)
+    sync-metadata))
 
 (defn sum-numbers
   "Similar to a 2-arg call to `map`, but will add all numbers that result from the invocations of `f`. Used mainly for

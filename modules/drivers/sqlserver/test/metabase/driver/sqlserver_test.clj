@@ -1,30 +1,24 @@
 (ns metabase.driver.sqlserver-test
-  (:require [clojure
-             [string :as str]
-             [test :refer :all]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer :all]
             [colorize.core :as colorize]
             [honeysql.core :as hsql]
             [java-time :as t]
             [medley.core :as m]
-            [metabase
-             [driver :as driver]
-             [query-processor :as qp]
-             [query-processor-test :as qp.test]
-             [test :as mt]]
-            [metabase.driver.sql-jdbc
-             [connection :as sql-jdbc.conn]
-             [execute :as sql-jdbc.execute]]
+            [metabase.driver :as driver]
+            [metabase.driver.sql-jdbc.connection :as sql-jdbc.conn]
+            [metabase.driver.sql-jdbc.execute :as sql-jdbc.execute]
             [metabase.driver.sql.query-processor :as sql.qp]
             [metabase.driver.sql.util.unprepare :as unprepare]
-            [metabase.query-processor
-             [test-util :as qp.test-util]
-             [timezone :as qp.timezone]]
-            [metabase.test
-             [data :as data]
-             [util :as tu :refer [obj->json->obj]]]
-            [metabase.test.data
-             [datasets :as datasets]
-             [interface :as tx]]))
+            [metabase.query-processor :as qp]
+            [metabase.query-processor-test :as qp.test]
+            [metabase.query-processor.test-util :as qp.test-util]
+            [metabase.query-processor.timezone :as qp.timezone]
+            [metabase.test :as mt]
+            [metabase.test.data :as data]
+            [metabase.test.data.datasets :as datasets]
+            [metabase.test.data.interface :as tx]
+            [metabase.test.util :as tu :refer [obj->json->obj]]))
 
 ;;; -------------------------------------------------- VARCHAR(MAX) --------------------------------------------------
 
@@ -35,14 +29,15 @@
 
 (tx/defdataset ^:private genetic-data
   [["genetic-data"
-     [{:field-name "gene", :base-type {:native "VARCHAR(MAX)"}}]
-     [[a-gene]]]])
+    [{:field-name "gene", :base-type {:native "VARCHAR(MAX)"}}]
+    [[a-gene]]]])
 
 (datasets/expect-with-driver :sqlserver
   [[1 a-gene]]
-  (-> (data/dataset metabase.driver.sqlserver-test/genetic-data
-        (data/run-mbql-query genetic-data))
-      :data :rows obj->json->obj)) ; convert to JSON + back so the Clob gets stringified
+  (-> (data/dataset metabase.driver.sqlserver-test/genetic-data (data/run-mbql-query genetic-data))
+      :data
+      :rows
+      obj->json->obj)) ; convert to JSON + back so the Clob gets stringified
 
 (deftest connection-spec-test
   (testing "Test that additional connection string options work (#5296)"
@@ -85,10 +80,10 @@
             " ) \"source\" ") ; not sure why this generates an extra space before the closing paren, but it does
    :params nil}
   (qp/query->native
-    (data/mbql-query venues
-      {:source-query {:source-table $$venues
-                      :fields       [$name]
-                      :order-by     [[:asc $id]]}})))
+   (data/mbql-query venues
+     {:source-query {:source-table $$venues
+                     :fields       [$name]
+                     :order-by     [[:asc $id]]}})))
 
 ;; make sure when adding TOP clauses to make ORDER BY work we don't stomp over any explicit TOP clauses that may have
 ;; been set in the query
@@ -102,12 +97,12 @@
                " ) \"source\" ")
    :params nil}
   (qp/query->native
-    (data/mbql-query venues
-      {:source-query {:source-table $$venues
-                      :fields       [$name]
-                      :order-by     [[:asc $id]]
-                      :limit        20}
-       :limit        10})))
+   (data/mbql-query venues
+     {:source-query {:source-table $$venues
+                     :fields       [$name]
+                     :order-by     [[:asc $id]]
+                     :limit        20}
+      :limit        10})))
 
 ;; We don't need to add TOP clauses for top-level order by. Normally we always add one anyway because of the
 ;; max-results stuff, but make sure our impl doesn't add one when it's not in the source MBQL
@@ -123,12 +118,12 @@
    :params nil}
   ;; in order to actually see how things would work without the implicit max-results limit added we'll preprocess
   ;; the query, strip off the `:limit` that got added, and then feed it back to the QP where we left off
-  (let [preprocessed (-> (qp/query->preprocessed
-                           (data/mbql-query venues
-                             {:source-query {:source-table $$venues
-                                             :fields       [$name]
-                                             :order-by     [[:asc $id]]}
-                              :order-by     [[:asc $id]]}))
+  (let [preprocessed (-> (data/mbql-query venues
+                           {:source-query {:source-table $$venues
+                                           :fields       [$name]
+                                           :order-by     [[:asc $id]]}
+                            :order-by     [[:asc $id]]})
+                         qp/query->preprocessed
                          (m/dissoc-in [:query :limit]))]
     (qp.test-util/with-everything-store
       (driver/mbql->native :sqlserver preprocessed))))
@@ -140,12 +135,12 @@
    ["The Apple Pan"]]
   (qp.test/rows
     (qp/process-query
-      (data/mbql-query venues
-        {:source-query {:source-table $$venues
-                        :fields       [$name]
-                        :order-by     [[:asc $id]]
-                        :limit        5}
-         :limit        3}))))
+     (data/mbql-query venues
+       {:source-query {:source-table $$venues
+                       :fields       [$name]
+                       :order-by     [[:asc $id]]
+                       :limit        5}
+        :limit        3}))))
 
 (deftest locale-bucketing-test
   (datasets/test-driver :sqlserver

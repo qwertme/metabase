@@ -1,13 +1,11 @@
 (ns metabase.query-processor.middleware.optimize-datetime-filters-test
-  (:require [clojure
-             [string :as str]
-             [test :refer :all]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer :all]
             [java-time :as t]
-            [metabase
-             [driver :as driver]
-             [query-processor :as qp]
-             [test :as mt]]
+            [metabase.driver :as driver]
+            [metabase.query-processor :as qp]
             [metabase.query-processor.middleware.optimize-datetime-filters :as optimize-datetime-filters]
+            [metabase.test :as mt]
             [metabase.util.date-2 :as u.date]))
 
 (driver/register! ::timezone-driver, :abstract? true)
@@ -144,15 +142,14 @@
                      [:absolute-datetime filter-value unit]
                      [:absolute-datetime filter-value unit]])))))))))
 
-(defn- optimize-with-timezone [t]
+(defn- optimize-filter-clauses [t]
   (let [query {:database 1
                :type     :query
                :query    {:filter [:=
                                    [:datetime-field [:field-id 1] :day]
                                    [:absolute-datetime t :day]]}}]
     (-> (mt/test-qp-middleware optimize-datetime-filters/optimize-datetime-filters query)
-        :pre
-        (get-in [:query :filter]))))
+        (get-in [:pre :query :filter]))))
 
 (deftest timezones-test
   (driver/with-driver ::timezone-driver
@@ -174,7 +171,7 @@
                               [:>= [:datetime-field [:field-id 1] :default] [:absolute-datetime lower :default]]
                               [:<  [:datetime-field [:field-id 1] :default] [:absolute-datetime upper :default]]]]
                 (is (= expected
-                       (optimize-with-timezone t))
+                       (optimize-filter-clauses t))
                     (format "= %s in the %s timezone should be optimized to range %s -> %s"
                             t timezone-id lower upper))))))))))
 

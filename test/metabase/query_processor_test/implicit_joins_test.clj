@@ -2,10 +2,9 @@
   "Test for JOIN behavior."
   (:require [clojure.test :refer :all]
             [expectations :refer [expect]]
-            [metabase
-             [driver :as driver]
-             [query-processor-test :as qp.test]
-             [test :as mt]]
+            [metabase.driver :as driver]
+            [metabase.query-processor-test :as qp.test]
+            [metabase.test :as mt]
             [metabase.test.data.datasets :as datasets]))
 
 ;; The top 10 cities by number of Tupac sightings
@@ -149,4 +148,4 @@
         (mt/run-mbql-query messages
           {:aggregation [[:count]]
            :breakout    [$sender_id->users.name]
-           :filter      [:= $reciever_id->users.name "Rasta Toucan"]})))))
+           :filter      [:= $receiver_id->users.name "Rasta Toucan"]})))))

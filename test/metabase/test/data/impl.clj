@@ -1,22 +1,19 @@
 (ns metabase.test.data.impl
   "Internal implementation of various helper functions in `metabase.test.data`."
   (:require [clojure.tools.logging :as log]
-            [metabase
-             [config :as config]
-             [driver :as driver]
-             [sync :as sync]
-             [util :as u]]
-            [metabase.models
-             [database :refer [Database]]
-             [field :as field :refer [Field]]
-             [table :refer [Table]]]
+            [metabase.config :as config]
+            [metabase.driver :as driver]
+            [metabase.models.database :refer [Database]]
+            [metabase.models.field :as field :refer [Field]]
+            [metabase.models.table :refer [Table]]
             [metabase.plugins.classloader :as classloader]
-            [metabase.test.data
-             [dataset-definitions :as defs]
-             [interface :as tx]]
+            [metabase.sync :as sync]
+            [metabase.test.data.dataset-definitions :as defs]
             [metabase.test.data.impl.verify :as verify]
+            [metabase.test.data.interface :as tx]
             [metabase.test.initialize :as initialize]
             [metabase.test.util.timezone :as tu.tz]
+            [metabase.util :as u]
             [potemkin :as p]
             [toucan.db :as db]))
 
@@ -78,7 +75,7 @@
 
 (def ^:private create-database-timeout-ms
   "Max amount of time to wait for driver text extensions to create a DB and load test data."
-  (u/minutes->ms 4)) ; 4 minutes
+  (u/minutes->ms 9)) ; 9 minutes - Redshift is slow. Set to 9 minutes because Circle CI will timeout at 10 minutes.
 
 (def ^:private sync-timeout-ms
   "Max amount of time to wait for sync to complete."
@@ -162,6 +159,8 @@
 (defn do-with-db
   "Internal impl of `data/with-db`."
   [db f]
+  (assert (and (map? db) (integer? (:id db)))
+          (format "Not a valid database: %s" (pr-str db)))
   (binding [*get-db* (constantly db)]
     (f)))
 
@@ -291,24 +290,3 @@
                                  db))))]
     (binding [*get-db* #(get-db-for-driver (tx/driver))]
       (f))))
-
-
-;;; +----------------------------------------------------------------------------------------------------------------+
-;;; |                                               with-temp-objects                                                |
-;;; +----------------------------------------------------------------------------------------------------------------+
-
-(defn- delete-model-instance!
-  "Allows deleting a row by the model instance toucan returns when it's inserted"
-  [{:keys [id] :as instance}]
-  (db/delete! (-> instance name symbol) :id id))
-
-(defn do-with-temp-objects
-  "Internal impl of `data/with-data`. Takes a thunk `data-load-fn` that returns a seq of Toucan model instances that
-  will be deleted after `body-fn` finishes"
-  [data-load-fn body-fn]
-  (let [result-instances (data-load-fn)]
-    (try
-      (body-fn)
-      (finally
-        (doseq [instance result-instances]
-          (delete-model-instance! instance))))))

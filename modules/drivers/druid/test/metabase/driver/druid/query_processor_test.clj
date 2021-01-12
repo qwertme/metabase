@@ -4,15 +4,14 @@
             [clojure.test :refer :all]
             [java-time :as t]
             [medley.core :as m]
-            [metabase
-             [driver :as driver]
-             [models :refer [Field Metric Table]]
-             [query-processor :as qp]
-             [test :as mt]
-             [util :as u]]
             [metabase.db.metadata-queries :as metadata-queries]
+            [metabase.driver :as driver]
             [metabase.driver.druid.query-processor :as druid.qp]
+            [metabase.models :refer [Field Metric Table]]
+            [metabase.query-processor :as qp]
+            [metabase.test :as mt]
             [metabase.timeseries-query-processor-test.util :as tqpt]
+            [metabase.util :as u]
             [metabase.util.date-2 :as u.date]))
 
 (defn- str->absolute-dt [s]
@@ -234,7 +233,8 @@
   (->> (metadata-queries/table-rows-sample (Table (mt/id :checkins))
          [(Field (mt/id :checkins :id))
           (Field (mt/id :checkins :venue_name))
-          (Field (mt/id :checkins :timestamp))])
+          (Field (mt/id :checkins :timestamp))]
+         (constantly conj))
        (sort-by first)
        (take 5)))
 
@@ -344,9 +344,7 @@
 
 (deftest start-of-week-test
   (mt/test-driver :druid
-    (testing (str "Count the number of events in the given week. Metabase uses Sunday as the start of the week, Druid by "
-                  "default will use Monday. All of the below events should happen in one week. Using Druid's default "
-                  "grouping, 3 of the events would have counted for the previous week.")
+    (testing (str "Count the number of events in the given week. ")
       (is (= [["2015-10-04" 9]]
              (druid-query-returning-rows
                {:filter      [:between !day.timestamp "2015-10-04" "2015-10-10"]

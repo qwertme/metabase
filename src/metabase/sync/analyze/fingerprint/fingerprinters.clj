@@ -1,19 +1,16 @@
 (ns metabase.sync.analyze.fingerprint.fingerprinters
   "Non-identifying fingerprinters for various field types."
   (:require [bigml.histogram.core :as hist]
-            [cheshire.core :as json]
             [java-time :as t]
-            [kixi.stats
-             [core :as stats]
-             [math :as math]]
+            [kixi.stats.core :as stats]
+            [kixi.stats.math :as math]
             [medley.core :as m]
             [metabase.models.field :as field]
             [metabase.sync.analyze.classifiers.name :as classify.name]
             [metabase.sync.util :as sync-util]
             [metabase.util :as u]
-            [metabase.util
-             [date-2 :as u.date]
-             [i18n :refer [deferred-trs trs]]]
+            [metabase.util.date-2 :as u.date]
+            [metabase.util.i18n :refer [deferred-trs trs]]
             [redux.core :as redux])
   (:import com.bigml.histogram.Histogram
            com.clearspring.analytics.stream.cardinality.HyperLogLogPlus
@@ -225,10 +222,20 @@
         :q3  q3)))))
 
 (defn- valid-serialized-json?
-  "Is x a serialized JSON dictionary or array."
+  "Is x a serialized JSON dictionary or array. Hueristically recognize maps and arrays. Uses the following strategies:
+  - leading character {: assume valid JSON
+  - leading character [: assume valid json unless its of the form [ident] where ident is not a boolean."
   [x]
   (u/ignore-exceptions
-    ((some-fn map? sequential?) (json/parse-string x))))
+    (when (and x (string? x))
+      (let [matcher (case (first x)
+                      \[ (fn bracket-matcher [s]
+                           (cond (re-find #"^\[\s*(?:true|false)" s) true
+                                 (re-find #"^\[\s*[a-zA-Z]" s) false
+                                 :else true))
+                      \{ (constantly true)
+                      (constantly false))]
+        (matcher x)))))
 
 (deffingerprinter :type/Text
   ((map str) ; we cast to str to support `field-literal` type overwriting:
@@ -237,6 +244,7 @@
    (robust-fuse {:percent-json   (stats/share valid-serialized-json?)
                  :percent-url    (stats/share u/url?)
                  :percent-email  (stats/share u/email?)
+                 :percent-state  (stats/share u/state?)
                  :average-length ((map count) stats/mean)})))
 
 (defn fingerprint-fields

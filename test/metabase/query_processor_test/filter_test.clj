@@ -1,11 +1,10 @@
 (ns metabase.query-processor-test.filter-test
   "Tests for the `:filter` clause."
   (:require [clojure.test :refer :all]
-            [metabase
-             [driver :as driver]
-             [query-processor :as qp]
-             [query-processor-test :as qp.test]
-             [test :as mt]]))
+            [metabase.driver :as driver]
+            [metabase.query-processor :as qp]
+            [metabase.query-processor-test :as qp.test]
+            [metabase.test :as mt]))
 
 (deftest and-test
   (mt/test-drivers (mt/normal-drivers)
@@ -440,3 +439,10 @@
                (mt/run-mbql-query venues
                  {:aggregation [[:count]]
                   :filter      [:starts-with $name "In-N-Out"]})))))))
+
+(deftest automatically-parse-strings-test
+  (mt/test-drivers (mt/normal-drivers)
+    (testing "The QP should automatically parse String parameters in filter clauses to the correct type"
+      (testing "String parameter to an Integer Field"
+        (is (= (mt/rows (mt/run-mbql-query venues {:filter [:= $price 4]}))
+               (mt/rows (mt/run-mbql-query venues {:filter [:= $price "4"]}))))))))

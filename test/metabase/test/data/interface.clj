@@ -9,25 +9,21 @@
             [clojure.tools.reader.edn :as edn]
             [environ.core :refer [env]]
             [medley.core :as m]
-            [metabase
-             [db :as mdb]
-             [driver :as driver]
-             [query-processor :as qp]
-             [util :as u]]
-            [metabase.models
-             [database :refer [Database]]
-             [field :as field :refer [Field]]
-             [table :refer [Table]]]
+            [metabase.db :as mdb]
+            [metabase.driver :as driver]
+            [metabase.models.database :refer [Database]]
+            [metabase.models.field :as field :refer [Field]]
+            [metabase.models.table :refer [Table]]
             [metabase.plugins.classloader :as classloader]
+            [metabase.query-processor :as qp]
             [metabase.test.initialize :as initialize]
-            [metabase.util
-             [date-2 :as u.date]
-             [schema :as su]]
+            [metabase.util :as u]
+            [metabase.util.date-2 :as u.date]
+            [metabase.util.schema :as su]
             [potemkin.types :as p.types]
             [pretty.core :as pretty]
             [schema.core :as s]
-            [toucan.db :as db])
-  (:import clojure.lang.Keyword))
+            [toucan.db :as db]))
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                   Dataset Definition Record Types & Protocol                                   |
@@ -44,7 +40,7 @@
    :base-type                        (s/cond-pre {:native su/NonBlankString} su/FieldType)
    (s/optional-key :special-type)    (s/maybe su/FieldType)
    (s/optional-key :visibility-type) (s/maybe (apply s/enum field/visibility-types))
-   (s/optional-key :fk)              (s/maybe s/Keyword)
+   (s/optional-key :fk)              (s/maybe su/KeywordOrString)
    (s/optional-key :field-comment)   (s/maybe su/NonBlankString)})
 
 (def ^:private ValidFieldDefinition
@@ -257,7 +253,6 @@
   {:arglists '([driver context database-definition])}
   dispatch-on-driver-with-test-extensions
   :hierarchy #'driver/hierarchy)
-
 
 (defmulti create-db!
   "Create a new database from `database-definition`, including adding tables, fields, and foreign key constraints,

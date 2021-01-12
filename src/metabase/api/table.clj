@@ -3,28 +3,24 @@
   (:require [clojure.tools.logging :as log]
             [compojure.core :refer [GET POST PUT]]
             [medley.core :as m]
-            [metabase
-             [driver :as driver]
-             [related :as related]
-             [sync :as sync]
-             [types :as types]
-             [util :as u]]
             [metabase.api.common :as api]
+            [metabase.driver :as driver]
             [metabase.driver.util :as driver.u]
-            [metabase.models
-             [card :refer [Card]]
-             [field :refer [Field]]
-             [field-values :as fv :refer [FieldValues]]
-             [interface :as mi]
-             [table :as table :refer [Table]]]
+            [metabase.models.card :refer [Card]]
+            [metabase.models.field :refer [Field]]
+            [metabase.models.field-values :as fv :refer [FieldValues]]
+            [metabase.models.interface :as mi]
+            [metabase.models.table :as table :refer [Table]]
+            [metabase.related :as related]
+            [metabase.sync :as sync]
             [metabase.sync.field-values :as sync-field-values]
-            [metabase.util
-             [i18n :refer [deferred-tru trs tru]]
-             [schema :as su]]
+            [metabase.types :as types]
+            [metabase.util :as u]
+            [metabase.util.i18n :refer [deferred-tru trs tru]]
+            [metabase.util.schema :as su]
             [schema.core :as s]
-            [toucan
-             [db :as db]
-             [hydrate :refer [hydrate]]]))
+            [toucan.db :as db]
+            [toucan.hydrate :refer [hydrate]]))
 
 (def ^:private TableVisibilityType
   "Schema for a valid table visibility type."
@@ -239,23 +235,23 @@
                 field)))))
 
 (defn fetch-query-metadata
-  "Returns the query metadata used to power the query builder for the given table `table-or-table-id`"
-  [table include_sensitive_fields include_hidden_fields]
+  "Returns the query metadata used to power the Query Builder for the given `table`. `include-sensitive-fields?` and
+  `include-hidden-fields?` can be either booleans or boolean strings."
+  [table include-sensitive-fields? include-hidden-fields?]
   (api/read-check table)
-  (let [driver (driver.u/database->driver (:db_id table))]
+  (let [driver                    (driver.u/database->driver (:db_id table))
+        include-sensitive-fields? (cond-> include-sensitive-fields? (string? include-sensitive-fields?) Boolean/parseBoolean)
+        include-hidden-fields?    (cond-> include-hidden-fields? (string? include-hidden-fields?) Boolean/parseBoolean)]
     (-> table
         (hydrate :db [:fields [:target :has_field_values] :dimensions :has_field_values] :segments :metrics)
         (m/dissoc-in [:db :details])
         (assoc-dimension-options driver)
         format-fields-for-response
-        (update :fields
-                (let [hidden    (Boolean/parseBoolean include_hidden_fields)
-                      sensitive (Boolean/parseBoolean include_sensitive_fields)]
-                  (partial filter (fn [{:keys [visibility_type]}]
-                                    (case (keyword visibility_type)
-                                      :hidden    hidden
-                                      :sensitive sensitive
-                                      true))))))))
+        (update :fields (partial filter (fn [{visibility-type :visibility_type}]
+                                          (case (keyword visibility-type)
+                                            :hidden    include-hidden-fields?
+                                            :sensitive include-sensitive-fields?
+                                            true)))))))
 
 (api/defendpoint GET "/:id/query_metadata"
   "Get metadata about a `Table` useful for running queries.

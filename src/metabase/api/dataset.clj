@@ -4,24 +4,19 @@
             [clojure.string :as str]
             [clojure.tools.logging :as log]
             [compojure.core :refer [POST]]
-            [metabase
-             [query-processor :as qp]
-             [util :as u]]
             [metabase.api.common :as api]
             [metabase.mbql.schema :as mbql.s]
-            [metabase.models
-             [card :refer [Card]]
-             [database :as database :refer [Database]]
-             [query :as query]]
-            [metabase.query-processor
-             [streaming :as qp.streaming]
-             [util :as qputil]]
-            [metabase.query-processor.middleware
-             [constraints :as qp.constraints]
-             [permissions :as qp.perms]]
-            [metabase.util
-             [i18n :refer [trs]]
-             [schema :as su]]
+            [metabase.models.card :refer [Card]]
+            [metabase.models.database :as database :refer [Database]]
+            [metabase.models.query :as query]
+            [metabase.query-processor :as qp]
+            [metabase.query-processor.middleware.constraints :as qp.constraints]
+            [metabase.query-processor.middleware.permissions :as qp.perms]
+            [metabase.query-processor.streaming :as qp.streaming]
+            [metabase.query-processor.util :as qputil]
+            [metabase.util :as u]
+            [metabase.util.i18n :refer [trs tru]]
+            [metabase.util.schema :as su]
             [schema.core :as s]))
 
 ;;; -------------------------------------------- Running a Query Normally --------------------------------------------
@@ -39,10 +34,14 @@
 
 (api/defendpoint ^:streaming POST "/"
   "Execute a query and retrieve the results in the usual format."
-  [:as {{:keys [database], :as query} :body}]
-  {database s/Int}
+  [:as {{:keys [database], query-type :type, :as query} :body}]
+  {database (s/maybe s/Int)}
+  ;; database is required unless this is an `internal` query.
   ;; don't permissions check the 'database' if it's the virtual database. That database doesn't actually exist :-)
-  (when-not (= database mbql.s/saved-questions-virtual-database-id)
+  (when (and (not= query-type "internal")
+             (not= database mbql.s/saved-questions-virtual-database-id))
+    (when-not database
+      (throw (Exception. (str (tru "`database` is required for all queries whose type is not `internal`.")))))
     (api/read-check Database database))
   ;; add sensible constraints for results limits on our query
   (let [source-card-id (query->source-card-id query)
@@ -87,10 +86,11 @@
     (let [query (-> (assoc query :async? true)
                     (dissoc :constraints)
                     (update :middleware #(-> %
-                                             (dissoc :add-default-userland-constraints?)
+                                             (dissoc :add-default-userland-constraints? :js-int-to-string?)
                                              (assoc :skip-results-metadata? true
                                                     :format-rows? false))))
-          info  {:executed-by api/*current-user-id*, :context (export-format->context export-format)}]
+          info  {:executed-by api/*current-user-id*
+                 :context     (export-format->context export-format)}]
       (qp.streaming/streaming-response [context export-format]
         (qp/process-query-and-save-execution! query info context)))))
 

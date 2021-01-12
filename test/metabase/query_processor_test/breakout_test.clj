@@ -1,22 +1,18 @@
 (ns metabase.query-processor-test.breakout-test
   "Tests for the `:breakout` clause."
   (:require [clojure.test :refer :all]
-            [metabase
-             [query-processor :as qp]
-             [query-processor-test :as qp.test]
-             [test :as mt]
-             [util :as u]]
             [metabase.mbql.schema :as mbql.s]
-            [metabase.models
-             [card :refer [Card]]
-             [dimension :refer [Dimension]]
-             [field :refer [Field]]]
-            [metabase.query-processor.middleware
-             [add-dimension-projections :as add-dim-projections]
-             [add-source-metadata :as add-source-metadata]]
+            [metabase.models.card :refer [Card]]
+            [metabase.models.dimension :refer [Dimension]]
+            [metabase.models.field :refer [Field]]
+            [metabase.query-processor :as qp]
+            [metabase.query-processor-test :as qp.test]
+            [metabase.query-processor.middleware.add-dimension-projections :as add-dim-projections]
+            [metabase.query-processor.middleware.add-source-metadata :as add-source-metadata]
             [metabase.query-processor.test-util :as qp.test-util]
+            [metabase.test :as mt]
             [metabase.test.data :as data]
-            [toucan.db :as db]))
+            [metabase.util :as u]))
 
 (deftest basic-test
   (mt/test-drivers (mt/normal-drivers)
@@ -72,8 +68,7 @@
 
 (deftest internal-remapping-test
   (mt/test-drivers (mt/normal-drivers)
-    (mt/with-temp-objects
-      (data/create-venue-category-remapping! "Foo")
+    (data/with-venue-category-remapping "Foo"
       (let [{:keys [rows cols]} (qp.test/rows-and-cols
                                   (mt/format-rows-by [int int str]
                                     (mt/run-mbql-query venues
@@ -93,12 +88,10 @@
 
 (deftest order-by-test
   (mt/test-drivers (mt/normal-drivers-with-feature :foreign-keys)
-    (mt/with-temp-objects
-      (fn []
-        [(db/insert! Dimension {:field_id                (data/id :venues :category_id)
+    (mt/with-temp Dimension [_ {:field_id                (data/id :venues :category_id)
                                 :name                    "Foo"
                                 :type                    :external
-                                :human_readable_field_id (data/id :categories :name)})])
+                                :human_readable_field_id (data/id :categories :name)}]
       (doseq [[sort-order expected] {:desc ["Wine Bar" "Thai" "Thai" "Thai" "Thai" "Steakhouse" "Steakhouse"
                                             "Steakhouse" "Steakhouse" "Southern"]
                                      :asc  ["American" "American" "American" "American" "American" "American" "American"
@@ -257,12 +250,13 @@
       ;; middleware is doing the right thing
       (with-redefs [add-source-metadata/mbql-source-query->metadata (constantly nil)]
         (mt/with-temp Card [card {:dataset_query (mt/mbql-query venues)}]
-          (is (thrown?
-               Exception
-               (mt/suppress-output
-                 (qp.test/rows
+          (mt/with-temp-vals-in-db Card (:id card) {:result_metadata nil}
+            (is (thrown?
+                 Exception
+                 (mt/suppress-output
+                  (qp.test/rows
                    (qp/process-query
-                    (nested-venues-query card)))))))))))
+                    (nested-venues-query card))))))))))))
 
 (deftest field-in-breakout-and-fields-test
   (mt/test-drivers (mt/normal-drivers)

@@ -3,22 +3,19 @@
   (:require [clojure.java.jdbc :as jdbc]
             [clojure.test :refer :all]
             [honeysql.core :as hsql]
-            [metabase
-             [driver :as driver]
-             [query-processor :as qp]
-             [sync :as sync]
-             [test :as mt]
-             [util :as u]]
+            [metabase.driver :as driver]
             [metabase.driver.postgres :as postgres]
-            [metabase.driver.sql-jdbc
-             [connection :as sql-jdbc.conn]
-             [execute :as sql-jdbc.execute]]
+            [metabase.driver.sql-jdbc.connection :as sql-jdbc.conn]
+            [metabase.driver.sql-jdbc.execute :as sql-jdbc.execute]
             [metabase.driver.sql.query-processor :as sql.qp]
-            [metabase.models
-             [database :refer [Database]]
-             [field :refer [Field]]
-             [table :refer [Table]]]
+            [metabase.models.database :refer [Database]]
+            [metabase.models.field :refer [Field]]
+            [metabase.models.table :refer [Table]]
+            [metabase.query-processor :as qp]
+            [metabase.sync :as sync]
             [metabase.sync.sync-metadata :as sync-metadata]
+            [metabase.test :as mt]
+            [metabase.util :as u]
             [toucan.db :as db]))
 
 (defn- drop-if-exists-and-create-db!
@@ -165,13 +162,18 @@
       (let [details (mt/dbdef->connection-details :postgres :db {:database-name "fdw_test"})]
         (jdbc/execute! (sql-jdbc.conn/connection-details->spec :postgres details)
                        [(str "CREATE EXTENSION IF NOT EXISTS postgres_fdw;
-                            CREATE SERVER foreign_server
+                              CREATE SERVER foreign_server
                                 FOREIGN DATA WRAPPER postgres_fdw
                                 OPTIONS (host '" (:host details) "', port '" (:port details) "', dbname 'fdw_test');
-                            CREATE TABLE public.local_table (data text);
-                            CREATE FOREIGN TABLE foreign_table (data text)
+                              CREATE TABLE public.local_table (data text);
+                              CREATE FOREIGN TABLE foreign_table (data text)
                                 SERVER foreign_server
-                                OPTIONS (schema_name 'public', table_name 'local_table');")])
+                                OPTIONS (schema_name 'public', table_name 'local_table');
+
+                              CREATE USER MAPPING FOR " (:user details) "
+                                SERVER foreign_server
+                                OPTIONS (user '" (:user details) "');
+                              GRANT ALL ON public.local_table to PUBLIC;")])
         (mt/with-temp Database [database {:engine :postgres, :details (assoc details :dbname "fdw_test")}]
           (is (= {:tables (set (map default-table-result ["foreign_table" "local_table"]))}
                  (driver/describe-database :postgres database))))))))
@@ -192,7 +194,8 @@
             ;; populate the DB and create a view
             (exec! ["CREATE table birds (name VARCHAR UNIQUE NOT NULL);"
                     "INSERT INTO birds (name) VALUES ('Rasta'), ('Lucky'), ('Kanye Nest');"
-                    "CREATE VIEW angry_birds AS SELECT upper(name) AS name FROM birds;"])
+                    "CREATE VIEW angry_birds AS SELECT upper(name) AS name FROM birds;"
+                    "GRANT ALL ON angry_birds to PUBLIC;"])
             ;; now sync the DB
             (sync!)
             ;; drop the view
@@ -200,7 +203,8 @@
             ;; sync again
             (sync!)
             ;; recreate the view
-            (exec! ["CREATE VIEW angry_birds AS SELECT upper(name) AS name FROM birds;"])
+            (exec! ["CREATE VIEW angry_birds AS SELECT upper(name) AS name FROM birds;"
+                    "GRANT ALL ON angry_birds to PUBLIC;"])
             ;; sync one last time
             (sync!)
             ;; now take a look at the Tables in the database related to the view. THERE SHOULD BE ONLY ONE!
@@ -370,7 +374,8 @@
   (create-enums-db!)
   (mt/with-temp Database [database {:engine :postgres, :details (enums-test-db-details)}]
     (sync-metadata/sync-db-metadata! database)
-    (f database)))
+    (f database)
+    (#'sql-jdbc.conn/set-pool! (u/id database) nil)))
 
 (deftest enums-test
   (mt/test-driver :postgres
@@ -481,6 +486,7 @@
                                 :type   {:type/Text {:percent-json   0.0
                                                      :percent-url    0.0
                                                      :percent-email  0.0
+                                                     :percent-state  0.0
                                                      :average-length 12.0}}}}
                  (db/select-field->field :name :fingerprint Field
                    :table_id (db/select-one-id Table :db_id (u/get-id database))))))))))
@@ -514,3 +520,31 @@
                    :field_ref    [:field-literal "sleep" :type/Text]
                    :name         "sleep"}]
                  (mt/cols results))))))))
+
+(deftest id-field-parameter-test
+  (mt/test-driver :postgres
+    (testing "We should be able to filter a PK column with a String value -- should get parsed automatically (#13263)"
+      (is (= [[2 "Stout Burgers & Beers" 11 34.0996 -118.329 2]]
+             (mt/rows
+               (mt/run-mbql-query venues
+                 {:filter [:= $id "2"]})))))))
+
+(deftest dont-sync-tables-with-no-select-permissions-test
+  (testing "Make sure we only sync databases for which the current user has SELECT permissions"
+    (mt/test-driver :postgres
+      (drop-if-exists-and-create-db! "no-select-test")
+      (let [details (mt/dbdef->connection-details :postgres :db {:database-name "no-select-test"})
+            spec    (sql-jdbc.conn/connection-details->spec :postgres details)]
+        (doseq [statement ["CREATE TABLE PUBLIC.table_with_perms (x INTEGER NOT NULL);"
+                           "CREATE TABLE PUBLIC.table_with_no_perms (y INTEGER NOT NULL);"
+                           "DROP USER IF EXISTS no_select_test_user;"
+                           "CREATE USER no_select_test_user WITH PASSWORD '123456';"
+                           "GRANT SELECT ON TABLE \"no-select-test\".PUBLIC.table_with_perms TO no_select_test_user;"]]
+          (jdbc/execute! spec [statement])))
+      (let [test-user-details (assoc (mt/dbdef->connection-details :postgres :db {:database-name "no-select-test"})
+                                     :user "no_select_test_user"
+                                     :password "123456")]
+        (mt/with-temp Database [database {:engine :postgres, :details test-user-details}]
+          (sync/sync-database! database)
+          (is (= #{"table_with_perms"}
+                 (db/select-field :name Table :db_id (:id database)))))))))

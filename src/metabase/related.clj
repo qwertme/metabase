@@ -3,17 +3,16 @@
   (:require [clojure.set :as set]
             [medley.core :as m]
             [metabase.api.common :as api]
-            [metabase.models
-             [card :refer [Card]]
-             [collection :refer [Collection]]
-             [dashboard :refer [Dashboard]]
-             [dashboard-card :refer [DashboardCard]]
-             [field :refer [Field]]
-             [interface :as mi]
-             [metric :refer [Metric]]
-             [query :refer [Query]]
-             [segment :refer [Segment]]
-             [table :refer [Table]]]
+            [metabase.models.card :refer [Card]]
+            [metabase.models.collection :refer [Collection]]
+            [metabase.models.dashboard :refer [Dashboard]]
+            [metabase.models.dashboard-card :refer [DashboardCard]]
+            [metabase.models.field :refer [Field]]
+            [metabase.models.interface :as mi]
+            [metabase.models.metric :refer [Metric]]
+            [metabase.models.query :refer [Query]]
+            [metabase.models.segment :refer [Segment]]
+            [metabase.models.table :refer [Table]]
             [metabase.query-processor.util :as qp.util]
             [schema.core :as s]
             [toucan.db :as db]))
@@ -94,7 +93,8 @@
 
 (def ^:private ^{:arglists '([entities])} filter-visible
   (partial filter (fn [{:keys [archived visibility_type active] :as entity}]
-                    (and (or (nil? visibility_type)
+                    (and (some? entity)
+                         (or (nil? visibility_type)
                              (= (qp.util/normalize-token visibility_type) :normal))
                          (not archived)
                          (not= active false)

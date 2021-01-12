@@ -2,6 +2,7 @@ import {
   snapshot,
   restore,
   USERS,
+  USER_GROUPS,
   withSampleDataset,
   signInAsAdmin,
 } from "__support__/cypress";
@@ -13,8 +14,13 @@ describe("snapshots", () => {
       setup();
       updateSettings();
       addUsersAndGroups();
+      createCollections();
       withSampleDataset(SAMPLE_DATASET => {
         createQuestionAndDashboard(SAMPLE_DATASET);
+        cy.writeFile(
+          "frontend/test/__support__/cypress_sample_dataset.json",
+          SAMPLE_DATASET,
+        );
       });
       snapshot("default");
       restore("blank");
@@ -62,9 +68,7 @@ describe("snapshots", () => {
     });
   }
 
-  const ALL_USERS_GROUP = 1;
-  const COLLECTION_GROUP = 4;
-  const DATA_GROUP = 5;
+  const { ALL_USERS_GROUP, COLLECTION_GROUP, DATA_GROUP } = USER_GROUPS;
 
   function addUsersAndGroups() {
     // groups
@@ -111,6 +115,25 @@ describe("snapshots", () => {
     });
   }
 
+  function createCollections() {
+    function postCollection(name, parent_id, callback) {
+      cy.request("POST", "/api/collection", {
+        name,
+        color: "#509ee3",
+        description: `Collection ${name}`,
+        parent_id,
+      }).then(({ body }) => callback && callback(body));
+    }
+    postCollection("First collection", undefined, firstCollection =>
+      postCollection(
+        "Second collection",
+        firstCollection.id,
+        secondCollection =>
+          postCollection("Third collection", secondCollection.id),
+      ),
+    );
+  }
+
   function createQuestionAndDashboard({ ORDERS, ORDERS_ID }) {
     // question 1: Orders
     cy.request("POST", "/api/card", {
@@ -155,7 +178,22 @@ describe("snapshots", () => {
 
     // dashboard 1: Orders in a dashboard
     cy.request("POST", "/api/dashboard", { name: "Orders in a dashboard" });
-    cy.request("POST", `/api/dashboard/1/cards`, { cardId: 1 });
+    cy.request("POST", `/api/dashboard/1/cards`, { cardId: 1 }).then(
+      ({ body: { id: dashCardId } }) => {
+        cy.request("PUT", `/api/dashboard/1/cards`, {
+          cards: [
+            {
+              id: dashCardId,
+              card_id: 1,
+              row: 0,
+              col: 0,
+              sizeX: 12,
+              sizeY: 8,
+            },
+          ],
+        });
+      },
+    );
 
     // dismiss the "it's ok to play around" modal
     Object.values(USERS).map((_, index) =>
@@ -194,6 +232,11 @@ describe("snapshots", () => {
       cy.request("POST", "/api/database/2/rescan_values");
       cy.wait(1000); // wait for sync
       snapshot("withSqlite");
+      // TODO: Temporary HACK that requires further investigation and a better solution.
+      // sqlite driver was messing with the sync of postres database in CY tests
+      // ("probably some weird race condition" @Damon)
+      // Deleting it here keeps snapshots intact, and enables for unobstructed postgres testing.
+      cy.request("DELETE", "/api/database/2");
       restore("blank");
     });
   });

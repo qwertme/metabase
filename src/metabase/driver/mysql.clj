@@ -1,29 +1,25 @@
 (ns metabase.driver.mysql
   "MySQL driver. Builds off of the SQL-JDBC driver."
-  (:require [clojure
-             [set :as set]
-             [string :as str]]
-            [clojure.java.jdbc :as jdbc]
+  (:require [clojure.java.jdbc :as jdbc]
+            [clojure.set :as set]
+            [clojure.string :as str]
             [clojure.tools.logging :as log]
             [honeysql.core :as hsql]
             [java-time :as t]
-            [metabase
-             [driver :as driver]
-             [util :as u]]
             [metabase.db.spec :as dbspec]
+            [metabase.driver :as driver]
             [metabase.driver.common :as driver.common]
-            [metabase.driver.sql-jdbc
-             [common :as sql-jdbc.common]
-             [connection :as sql-jdbc.conn]
-             [execute :as sql-jdbc.execute]
-             [sync :as sql-jdbc.sync]]
+            [metabase.driver.sql-jdbc.common :as sql-jdbc.common]
+            [metabase.driver.sql-jdbc.connection :as sql-jdbc.conn]
+            [metabase.driver.sql-jdbc.execute :as sql-jdbc.execute]
+            [metabase.driver.sql-jdbc.sync :as sql-jdbc.sync]
             [metabase.driver.sql.query-processor :as sql.qp]
             [metabase.driver.sql.util.unprepare :as unprepare]
             [metabase.query-processor.timezone :as qp.timezone]
-            [metabase.util
-             [honeysql-extensions :as hx]
-             [i18n :refer [trs]]
-             [ssh :as ssh]])
+            [metabase.util :as u]
+            [metabase.util.honeysql-extensions :as hx]
+            [metabase.util.i18n :refer [trs]]
+            [metabase.util.ssh :as ssh])
   (:import [java.sql DatabaseMetaData ResultSet ResultSetMetaData Types]
            [java.time LocalDateTime OffsetDateTime OffsetTime ZonedDateTime]))
 
@@ -98,6 +94,11 @@
     (recur driver hsql-form (/ amount 1000.0) :second)
     (hsql/call :date_add hsql-form (hsql/raw (format "INTERVAL %s %s" amount (name unit))))))
 
+;; now() returns current timestamp in seconds resolution; now(6) returns it in nanosecond resolution
+(defmethod sql.qp/current-datetime-honeysql-form :mysql
+  [_]
+  (hsql/call :now 6))
+
 (defmethod driver/humanize-connection-error-message :mysql
   [_ message]
   (condp re-matches message
@@ -116,10 +117,9 @@
     #".*"                               ; default
     message))
 
-(defmethod driver/db-default-timezone :mysql
-  [_ db]
-  (let [spec                                   (sql-jdbc.conn/db->pooled-connection-spec db)
-        sql                                    (str "SELECT @@GLOBAL.time_zone AS global_tz,"
+(defmethod sql-jdbc.sync/db-default-timezone :mysql
+  [_ spec]
+  (let [sql                                    (str "SELECT @@GLOBAL.time_zone AS global_tz,"
                                                     " @@system_time_zone AS system_tz,"
                                                     " time_format("
                                                     "   timediff("
@@ -150,6 +150,10 @@
 ;; users in the UI
 (defmethod driver/supports? [:mysql :case-sensitivity-string-filter-options] [_ _] false)
 
+(defmethod driver/db-start-of-week :mysql
+  [_]
+  :sunday)
+
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                           metabase.driver.sql impls                                            |
@@ -157,6 +161,10 @@
 
 (defmethod sql.qp/unix-timestamp->honeysql [:mysql :seconds] [_ _ expr]
   (hsql/call :from_unixtime expr))
+
+(defmethod sql.qp/cast-temporal-string [:mysql :type/ISO8601DateTimeString]
+  [_driver _special_type expr]
+  (hx/->datetime expr))
 
 (defn- date-format [format-str expr] (hsql/call :date_format expr (hx/literal format-str)))
 (defn- str-to-date [format-str expr] (hsql/call :str_to_date expr (hx/literal format-str)))
@@ -179,8 +187,10 @@
 ;; Since MySQL doesn't have date_trunc() we fake it by formatting a date to an appropriate string and then converting
 ;; back to a date. See http://dev.mysql.com/doc/refman/5.6/en/date-and-time-functions.html#function_date-format for an
 ;; explanation of format specifiers
+;; this will generate a SQL statement casting the TIME to a DATETIME so date_format doesn't fail:
+;; date_format(CAST(mytime AS DATETIME), '%Y-%m-%d %H') AS mytime
 (defn- trunc-with-format [format-str expr]
-  (str-to-date format-str (date-format format-str expr)))
+  (str-to-date format-str (date-format format-str (hx/cast :DATETIME expr))))
 
 (defmethod sql.qp/date [:mysql :default]         [_ _ expr] expr)
 (defmethod sql.qp/date [:mysql :minute]          [_ _ expr] (trunc-with-format "%Y-%m-%d %H:%i" expr))
@@ -188,23 +198,24 @@
 (defmethod sql.qp/date [:mysql :hour]            [_ _ expr] (trunc-with-format "%Y-%m-%d %H" expr))
 (defmethod sql.qp/date [:mysql :hour-of-day]     [_ _ expr] (hx/hour expr))
 (defmethod sql.qp/date [:mysql :day]             [_ _ expr] (hsql/call :date expr))
-(defmethod sql.qp/date [:mysql :day-of-week]     [_ _ expr] (hsql/call :dayofweek expr))
 (defmethod sql.qp/date [:mysql :day-of-month]    [_ _ expr] (hsql/call :dayofmonth expr))
 (defmethod sql.qp/date [:mysql :day-of-year]     [_ _ expr] (hsql/call :dayofyear expr))
 (defmethod sql.qp/date [:mysql :month-of-year]   [_ _ expr] (hx/month expr))
 (defmethod sql.qp/date [:mysql :quarter-of-year] [_ _ expr] (hx/quarter expr))
 (defmethod sql.qp/date [:mysql :year]            [_ _ expr] (hsql/call :makedate (hx/year expr) 1))
 
+(defmethod sql.qp/date [:mysql :day-of-week]
+  [_ _ expr]
+  (sql.qp/adjust-day-of-week :mysql (hsql/call :dayofweek expr)))
+
 ;; To convert a YEARWEEK (e.g. 201530) back to a date you need tell MySQL which day of the week to use,
 ;; because otherwise as far as MySQL is concerned you could be talking about any of the days in that week
 (defmethod sql.qp/date [:mysql :week] [_ _ expr]
-  (str-to-date "%X%V %W"
-               (hx/concat (hsql/call :yearweek expr)
-                          (hx/literal " Sunday"))))
-
-;; mode 6: Sunday is first day of week, first week of year is the first one with 4+ days
-(defmethod sql.qp/date [:mysql :week-of-year] [_ _ expr]
-  (hx/inc (hx/week expr 6)))
+  (let [extract-week-fn (fn [expr]
+                          (str-to-date "%X%V %W"
+                                       (hx/concat (hsql/call :yearweek expr)
+                                                  (hx/literal " Sunday"))))]
+    (sql.qp/adjust-start-of-week :mysql extract-week-fn expr)))
 
 (defmethod sql.qp/date [:mysql :month] [_ _ expr]
   (str-to-date "%Y-%m-%d"
@@ -259,7 +270,7 @@
     :TINYTEXT   :type/Text
     :VARBINARY  :type/*
     :VARCHAR    :type/Text
-    :YEAR       :type/Integer}
+    :YEAR       :type/Date}
    ;; strip off " UNSIGNED" from end if present
    (keyword (str/replace (name database-type) #"\sUNSIGNED$" ""))))
 
@@ -367,6 +378,15 @@
         (parent-thunk)
         (catch Throwable _
           (.getString rs i))))))
+
+(defmethod sql-jdbc.execute/read-column-thunk [:mysql Types/DATE]
+  [driver ^ResultSet rs ^ResultSetMetaData rsmeta ^Integer i]
+  (if (= "YEAR" (.getColumnTypeName rsmeta i))
+    (fn read-time-thunk []
+      (when-let [x (.getObject rs i)]
+        (.toLocalDate ^java.sql.Date x)))
+    (let [parent-thunk ((get-method sql-jdbc.execute/read-column-thunk [:sql-jdbc Types/DATE]) driver rs rsmeta i)]
+      parent-thunk)))
 
 (defn- format-offset [t]
   (let [offset (t/format "ZZZZZ" (t/zone-offset t))]

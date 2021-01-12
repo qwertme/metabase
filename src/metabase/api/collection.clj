@@ -6,26 +6,23 @@
   `?namespace=snippet`)."
   (:require [clojure.string :as str]
             [compojure.core :refer [GET POST PUT]]
-            [metabase.api
-             [card :as card-api]
-             [common :as api]]
-            [metabase.models
-             [card :refer [Card]]
-             [collection :as collection :refer [Collection]]
-             [dashboard :refer [Dashboard]]
-             [interface :as mi]
-             [native-query-snippet :refer [NativeQuerySnippet]]
-             [permissions :as perms]
-             [pulse :as pulse :refer [Pulse]]]
-            [metabase.models.collection
-             [graph :as collection.graph]
-             [root :as collection.root]]
+            [metabase.api.card :as card-api]
+            [metabase.api.common :as api]
+            [metabase.models.card :refer [Card]]
+            [metabase.models.collection :as collection :refer [Collection]]
+            [metabase.models.collection.graph :as collection.graph]
+            [metabase.models.collection.root :as collection.root]
+            [metabase.models.dashboard :refer [Dashboard]]
+            [metabase.models.interface :as mi]
+            [metabase.models.native-query-snippet :refer [NativeQuerySnippet]]
+            [metabase.models.permissions :as perms]
+            [metabase.models.pulse :as pulse :refer [Pulse]]
+            [metabase.models.pulse-card :refer [PulseCard]]
             [metabase.util :as u]
             [metabase.util.schema :as su]
             [schema.core :as s]
-            [toucan
-             [db :as db]
-             [hydrate :refer [hydrate]]]))
+            [toucan.db :as db]
+            [toucan.hydrate :refer [hydrate]]))
 
 (declare root-collection)
 
@@ -40,18 +37,39 @@
    namespace (s/maybe su/NonBlankString)}
   (let [archived? (Boolean/parseBoolean archived)]
     (as-> (db/select Collection
-            :archived archived?
-            :namespace namespace
-            {:order-by [[:%lower.name :asc]]}) collections
-      (filter mi/can-read? collections)
+            {:where    [:and
+                        [:= :archived archived?]
+                        [:= :namespace namespace]
+                        (collection/visible-collection-ids->honeysql-filter-clause
+                         :id
+                         (collection/permissions-set->visible-collection-ids @api/*current-user-permissions-set*))]
+             :order-by [[:%lower.name :asc]]}) collections
       ;; include Root Collection at beginning or results if archived isn't `true`
       (if archived?
         collections
-        (cons (root-collection) collections))
+        (cons (root-collection namespace) collections))
       (hydrate collections :can_write)
       ;; remove the :metabase.models.collection.root/is-root? tag since FE doesn't need it
       (for [collection collections]
         (dissoc collection ::collection.root/is-root?)))))
+
+(api/defendpoint GET "/tree"
+  "Similar to `GET /`, but returns Collections in a tree structure, e.g.
+
+    [{:name     \"A\"
+      :children [{:name \"B\"}
+                 {:name     \"C\"
+                  :children [{:name     \"D\"
+                              :children [{:name \"E\"}]}
+                             {:name     \"F\"
+                              :children [{:name \"G\"}]}]}]}
+     {:name \"H\"}]"
+  []
+  (collection/collections->tree
+   (db/select Collection
+     {:where (collection/visible-collection-ids->honeysql-filter-clause
+              :id
+              (collection/permissions-set->visible-collection-ids @api/*current-user-permissions-set*))})))
 
 
 ;;; --------------------------------- Fetching a single Collection & its 'children' ----------------------------------
@@ -73,7 +91,8 @@
 
   *  `collection` will be either a CollectionInstance, or the Root Collection special placeholder object, so do not use
      `u/get-id` on it! Use `:id`, which will return `nil` for the Root Collection, which is exactly what we want."
-  (fn [model collection options] model))
+  {:arglists '([model collection options])}
+  (fn [model _ _] (keyword model)))
 
 (defmethod fetch-collection-children :card
   [_ collection {:keys [archived?]}]
@@ -91,11 +110,18 @@
 
 (defmethod fetch-collection-children :pulse
   [_ collection {:keys [archived?]}]
-  (db/select [Pulse :id :name :collection_position]
-    :collection_id   (:id collection)
-    :archived        (boolean archived?)
-    ;; exclude Alerts
-    :alert_condition nil))
+  (db/query
+   {:select    [:p.id :p.name :p.collection_position]
+    :modifiers [:distinct]
+    :from      [[Pulse :p]]
+    :left-join [[PulseCard :pc] [:= :p.id :pc.pulse_id]]
+    :where     [:and
+                [:= :p.collection_id      (:id collection)]
+                [:= :p.archived           (boolean archived?)]
+                 ;; exclude alerts
+                [:= :p.alert_condition    nil]
+                 ;; exclude dashboard subscriptions
+                [:= :pc.dashboard_card_id nil]]}))
 
 (defmethod fetch-collection-children :snippet
   [_ collection {:keys [archived?]}]
@@ -163,13 +189,14 @@
 
 ;;; -------------------------------------------- GET /api/collection/root --------------------------------------------
 
-(defn- root-collection []
-  (collection-detail (collection/root-collection-with-ui-details)))
+(defn- root-collection [collection-namespace]
+  (collection-detail (collection/root-collection-with-ui-details collection-namespace)))
 
 (api/defendpoint GET "/root"
   "Return the 'Root' Collection object with standard details added"
-  []
-  (dissoc (root-collection) ::collection.root/is-root?))
+  [namespace]
+  {namespace (s/maybe su/NonBlankString)}
+  (dissoc (root-collection namespace) ::collection.root/is-root?))
 
 (api/defendpoint GET "/root/items"
   "Fetch objects that the current user should see at their root level. As mentioned elsewhere, the 'Root' Collection
@@ -191,12 +218,13 @@
    namespace (s/maybe su/NonBlankString)}
   ;; Return collection contents, including Collections that have an effective location of being in the Root
   ;; Collection for the Current User.
-  (collection-children
-   (assoc collection/root-collection :namespace namespace)
-   {:model     (if (mi/can-read? collection/root-collection)
-                 (keyword model)
-                 :collection)
-    :archived? (Boolean/parseBoolean archived)}))
+  (let [root-collection (assoc collection/root-collection :namespace namespace)]
+    (collection-children
+     root-collection
+     {:model     (if (mi/can-read? root-collection)
+                   (keyword model)
+                   :collection)
+      :archived? (Boolean/parseBoolean archived)})))
 
 
 ;;; ----------------------------------------- Creating/Editing a Collection ------------------------------------------
@@ -276,7 +304,6 @@
                                                                     :collection_id (u/get-id collection-before-update))))]
         (card-api/delete-alert-and-notify-archived! alerts))))
 
-
 (api/defendpoint PUT "/:id"
   "Modify an existing Collection, including archiving or unarchiving it, or moving it."
   [id, :as {{:keys [name color description archived parent_id], :as collection-updates} :body}]
@@ -299,7 +326,8 @@
     ;; if we *did* end up archiving this Collection, we most post a few notifications
     (maybe-send-archived-notificaitons! collection-before-update collection-updates))
   ;; finally, return the updated object
-  (Collection id))
+  (-> (Collection id)
+      (hydrate :parent_id)))
 
 
 ;;; ------------------------------------------------ GRAPH ENDPOINTS -------------------------------------------------
@@ -332,12 +360,13 @@
 
 (api/defendpoint PUT "/graph"
   "Do a batch update of Collections Permissions by passing in a modified graph."
-  [namespace :as {body :body}]
+  [:as {{:keys [namespace], :as body} :body}]
   {body      su/Map
    namespace (s/maybe su/NonBlankString)}
   (api/check-superuser)
-  (collection.graph/update-graph! namespace (dejsonify-graph body))
+  (->> (dissoc body :namespace)
+       dejsonify-graph
+       (collection.graph/update-graph! namespace))
   (collection.graph/graph namespace))
-
 
 (api/define-routes)

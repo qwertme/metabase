@@ -1,5 +1,4 @@
 /* @flow */
-
 import { t } from "ttag";
 import type {
   ClickAction,
@@ -23,8 +22,11 @@ export default ({ question, clicked }: ClickActionProps): ClickAction[] => {
   return [
     {
       name: "formatting",
-      section: "formatting",
-      title: t`Formatting`,
+      title: "Column formatting",
+      section: "sort",
+      buttonType: "formatting",
+      icon: "gear",
+      tooltip: t`Column formatting`,
       action: () =>
         showChartSettings({
           widget: {

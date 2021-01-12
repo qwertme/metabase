@@ -1,15 +1,13 @@
 (ns metabase.api.preview-embed-test
-  (:require [expectations :refer :all]
+  (:require [clojure.test :refer :all]
+            [expectations :refer :all]
             [metabase.api.embed-test :as embed-test]
-            [metabase.models
-             [card :refer [Card]]
-             [dashboard :refer [Dashboard]]]
-            [metabase.test
-             [data :as data]
-             [util :as tu]]
-            [metabase.test.data
-             [datasets :as datasets]
-             [users :as test-users]]
+            [metabase.models.card :refer [Card]]
+            [metabase.models.dashboard :refer [Dashboard]]
+            [metabase.test.data :as data]
+            [metabase.test.data.datasets :as datasets]
+            [metabase.test.data.users :as test-users]
+            [metabase.test.util :as tu]
             [metabase.util :as u]
             [toucan.util.test :as tt]))
 
@@ -212,20 +210,20 @@
     (tt/with-temp Dashboard [dash]
       ((test-users/user->client :crowberto) :get 400 (embed-test/with-new-secret-key (dashboard-url dash))))))
 
-;; Check that only ENABLED params that ARE NOT PRESENT IN THE JWT come back
-(expect
-  [{:slug "d", :name "d", :type "date"}]
-  (embed-test/with-embedding-enabled-and-new-secret-key
-    (tt/with-temp Dashboard [dash {:parameters [{:slug "a", :name "a", :type "date"}
-                                                {:slug "b", :name "b", :type "date"}
-                                                {:slug "c", :name "c", :type "date"}
-                                                {:slug "d", :name "d", :type "date"}]}]
-      (:parameters ((test-users/user->client :crowberto) :get 200 (dashboard-url dash
-                                                                    {:params            {:c 100},
-                                                                     :_embedding_params {:a "locked"
-                                                                                         :b "disabled"
-                                                                                         :c "enabled"
-                                                                                         :d "enabled"}}))))))
+(deftest only-enabled-params-not-in-jwt-test
+  (testing "Check that only ENABLED params that ARE NOT PRESENT IN THE JWT come back"
+    (embed-test/with-embedding-enabled-and-new-secret-key
+      (tt/with-temp Dashboard [dash {:parameters [{:id "_a", :slug "a", :name "a", :type "date"}
+                                                  {:id "_b", :slug "b", :name "b", :type "date"}
+                                                  {:id "_c", :slug "c", :name "c", :type "date"}
+                                                  {:id "_d", :slug "d", :name "d", :type "date"}]}]
+        (is (= [{:id "_d", :slug "d", :name "d", :type "date"}]
+               (:parameters ((test-users/user->client :crowberto) :get 200 (dashboard-url dash
+                                                                             {:params            {:c 100}
+                                                                              :_embedding_params {:a "locked"
+                                                                                                  :b "disabled"
+                                                                                                  :c "enabled"
+                                                                                                  :d "enabled"}})))))))))
 
 
 ;;; ------------------ GET /api/preview_embed/dashboard/:token/dashcard/:dashcard-id/card/:card-id -------------------

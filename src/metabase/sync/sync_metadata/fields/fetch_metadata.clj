@@ -4,12 +4,10 @@
   `metabase.sync.sync-metadata.fields.*` namespaces to determine what sync operations need to be performed by
   comparing the differences in the two sets of Metadata."
   (:require [medley.core :as m]
-            [metabase.models
-             [field :as field :refer [Field]]
-             [table :as table]]
-            [metabase.sync
-             [fetch-metadata :as fetch-metadata]
-             [interface :as i]]
+            [metabase.models.field :as field :refer [Field]]
+            [metabase.models.table :as table]
+            [metabase.sync.fetch-metadata :as fetch-metadata]
+            [metabase.sync.interface :as i]
             [metabase.sync.sync-metadata.fields.common :as common]
             [metabase.util :as u]
             [schema.core :as s]
@@ -80,7 +78,7 @@
 ;;; +----------------------------------------------------------------------------------------------------------------+
 
 (s/defn db-metadata :- #{i/TableMetadataField}
-  "Fetch metadata about Fields belonging to a given TABLE directly from an external database by calling its
-   driver's implementation of `describe-table`."
-  [database :- i/DatabaseInstance, table :- i/TableInstance]
+  "Fetch metadata about Fields belonging to a given `table` directly from an external database by calling its driver's
+  implementation of `describe-table`."
+  [database :- i/DatabaseInstance table :- i/TableInstance]
   (:fields (fetch-metadata/table-metadata database table)))

@@ -2,22 +2,19 @@
   (:require [clojure.core.match :refer [match]]
             [clojure.string :as str]
             [clojure.tools.logging :as log]
-            [metabase
-             [types :as types]
-             [util :as u]]
+            [metabase.driver.common :as driver.common]
             [metabase.driver.druid.js :as js]
-            [metabase.mbql
-             [schema :as mbql.s]
-             [util :as mbql.u]]
-            [metabase.query-processor
-             [error-type :as qp.error-type]
-             [interface :as i]
-             [store :as qp.store]
-             [timezone :as qp.timezone]]
+            [metabase.mbql.schema :as mbql.s]
+            [metabase.mbql.util :as mbql.u]
+            [metabase.query-processor.error-type :as qp.error-type]
+            [metabase.query-processor.interface :as i]
             [metabase.query-processor.middleware.annotate :as annotate]
-            [metabase.util
-             [date-2 :as u.date]
-             [i18n :as ui18n :refer [trs tru]]]
+            [metabase.query-processor.store :as qp.store]
+            [metabase.query-processor.timezone :as qp.timezone]
+            [metabase.types :as types]
+            [metabase.util :as u]
+            [metabase.util.date-2 :as u.date]
+            [metabase.util.i18n :as ui18n :refer [trs tru]]
             [schema.core :as s]))
 
 (def ^:private ^:const topN-max-results
@@ -825,18 +822,27 @@
     :day             (extract:timeFormat "yyyy-MM-dd'T'00:00:00ZZ")
     :day-of-week     (extract:js "function (timestamp) {"
                                  "  var date = new Date(timestamp);"
-                                 "  return date.getDay() + 1;"
+                                 (format "  var dayOfWeek = (date.getDay() + 1 + %s) %% 7;"
+                                         (driver.common/start-of-week-offset :druid))
+                                 "  return (dayOfWeek == 0) ? 7 : dayOfWeek;"
                                  "}")
     :day-of-month    (extract:timeFormat "dd")
     :day-of-year     (extract:timeFormat "DDD")
     :week            (extract:js "function (timestamp) {"
                                  "  var date     = new Date(timestamp);"
-                                 "  var firstDOW = new Date(date - (date.getDay() * 86400000));"
+                                 (format "  var firstDOW = new Date(date - ((date.getDay() + %s)  * 86400000));"
+                                         (driver.common/start-of-week-offset :druid))
                                  "  var month    = firstDOW.getMonth() + 1;"
                                  "  var day      = firstDOW.getDate();"
                                  "  return '' + firstDOW.getFullYear() + '-' + (month < 10 ? '0' : '') + month + '-' + (day < 10 ? '0' : '') + day;"
                                  "}")
-    :week-of-year    (extract:timeFormat "ww")
+    :week-of-year    (extract:js "function (timestamp) {"
+                                 "  var date = new Date(timestamp);"
+                                 (format "  var firstDOW = new Date(date - ((date.getDay() + %s)  * 86400000));"
+                                         (driver.common/start-of-week-offset :druid))
+                                 "  var dayOfYear = (Date.UTC(firstDOW.getFullYear(), firstDOW.getMonth(), firstDOW.getDate()) - Date.UTC(firstDOW.getFullYear(), 0, 0)) / 24 / 60 / 60 / 1000;"
+                                 "  return Math.floor(dayOfYear / 7) + 1;"
+                                 "}")
     :month           (extract:timeFormat "yyyy-MM-01")
     :month-of-year   (extract:timeFormat "MM")
     :quarter         (extract:js "function (timestamp) {"

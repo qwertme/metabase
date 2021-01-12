@@ -4,9 +4,8 @@
             [clojure.tools.logging :as log]
             [metabase.config :as config]
             [metabase.models.database :refer [Database]]
-            [metabase.sync
-             [interface :as i]
-             [util :as sync-util]]
+            [metabase.sync.interface :as i]
+            [metabase.sync.util :as sync-util]
             [metabase.util.schema :as su]
             [schema.core :as s]))
 
@@ -58,8 +57,6 @@
    [#"^postal(?:_?)code$"          int-or-text-type :type/ZipCode]
    [#"^role$"                      int-or-text-type :type/Category]
    [#"^sex$"                       int-or-text-type :type/Category]
-   [#"^state$"                     text-type        :type/State]
-   [#"_state$"                     text-type        :type/State]
    [#"^status$"                    int-or-text-type :type/Category]
    [#"^type$"                      int-or-text-type :type/Category]
    [#"^url$"                       text-type        :type/URL]
@@ -85,6 +82,9 @@
    [#"delet(?:e|i)"                date-type        :type/DeletionDate]
    [#"delet(?:e|i)"                time-type        :type/DeletionTime]
    [#"delet(?:e|i)"                timestamp-type   :type/DeletionTimestamp]
+   [#"update"                      date-type        :type/UpdatedDate]
+   [#"update"                      time-type        :type/UpdatedTime]
+   [#"update"                      timestamp-type   :type/UpdatedTimestamp]
    [#"source"                      int-or-text-type :type/Source]
    [#"channel"                     int-or-text-type :type/Source]
    [#"share"                       float-type       :type/Share]

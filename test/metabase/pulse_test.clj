@@ -1,23 +1,20 @@
 (ns metabase.pulse-test
-  (:require [clojure
-             [string :as str]
-             [test :refer :all]
-             [walk :as walk]]
-            [clojure.java.io :as io]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
+            [clojure.test :refer :all]
+            [clojure.walk :as walk]
             [medley.core :as m]
-            [metabase
-             [models :refer [Card Collection Pulse PulseCard PulseChannel PulseChannelRecipient]]
-             [pulse :as pulse]
-             [test :as mt]
-             [util :as u]]
             [metabase.integrations.slack :as slack]
-            [metabase.models
-             [permissions :as perms]
-             [permissions-group :as group]
-             [pulse :as models.pulse]]
+            [metabase.models :refer [Card Collection Pulse PulseCard PulseChannel PulseChannelRecipient]]
+            [metabase.models.permissions :as perms]
+            [metabase.models.permissions-group :as group]
+            [metabase.models.pulse :as models.pulse]
+            [metabase.pulse :as pulse]
             [metabase.pulse.render.body :as render.body]
             [metabase.pulse.test-util :as pulse.tu]
             [metabase.query-processor.middleware.constraints :as constraints]
+            [metabase.test :as mt]
+            [metabase.util :as u]
             [schema.core :as s]
             [toucan.db :as db]))
 
@@ -84,19 +81,21 @@
   [{:keys [pulse pulse-card channel card]
     :or   {channel :email}}
    f]
-  (mt/with-temp* [Pulse                 [{pulse-id :id, :as pulse} (merge {:name "Pulse Name"} pulse)]
-                  PulseCard             [_ (merge {:pulse_id pulse-id
-                                                   :card_id  (u/get-id card)
-                                                   :position 0}
-                                                  pulse-card)]
-                  PulseChannel          [{pc-id :id} (case channel
-                                                       :email
-                                                       {:pulse_id pulse-id}
+  (mt/with-temp* [Pulse        [{pulse-id :id, :as pulse}
+                                (-> pulse
+                                    (merge {:name "Pulse Name"}))]
+                  PulseCard    [_ (merge {:pulse_id pulse-id
+                                          :card_id  (u/get-id card)
+                                          :position 0}
+                                         pulse-card)]
+                  PulseChannel [{pc-id :id} (case channel
+                                              :email
+                                              {:pulse_id pulse-id}
 
-                                                       :slack
-                                                       {:pulse_id     pulse-id
-                                                        :channel_type "slack"
-                                                        :details      {:channel "#general"}})]]
+                                              :slack
+                                              {:pulse_id     pulse-id
+                                               :channel_type "slack"
+                                               :details      {:channel "#general"}})]]
     (if (= channel :email)
       (mt/with-temp PulseChannelRecipient [_ {:user_id          (rasta-id)
                                               :pulse_channel_id pc-id}]
@@ -113,9 +112,9 @@
 
 (defn- do-test
   "Run a single Pulse test with a standard set of boilerplate. Creates Card, Pulse, and other related objects using
-  `card`, `pulse`, and `pulse-card` properties, then sends the Pulse; finally, test assertions in `assert` are
-  invoked. `assert` can contain `:email` and/or `:slack` assertions, which are used to test an email and Slack version
-  of that Pulse respectively. `:assert` functions have the signature
+  `card`, `pulse`, `pulse-card` properties, then sends the Pulse; finally, test assertions in `assert` are invoked.
+  `assert` can contain `:email` and/or `:slack` assertions, which are used to test an email and Slack version of that
+  Pulse respectively. `:assert` functions have the signature
 
     (f object-ids send-pulse!-response)
 
@@ -133,8 +132,12 @@
           :when        f]
     (assert (fn? f))
     (testing (format "sent to %s channel" channel-type)
-      (mt/with-temp Card [{card-id :id} (merge {:name card-name} card)]
-        (with-pulse-for-card [{pulse-id :id} {:card card-id, :pulse pulse, :pulse-card pulse-card, :channel channel-type}]
+      (mt/with-temp* [Card          [{card-id :id} (merge {:name card-name} card)]]
+        (with-pulse-for-card [{pulse-id :id}
+                              {:card       card-id
+                               :pulse      pulse
+                               :pulse-card pulse-card
+                               :channel    channel-type}]
           (letfn [(thunk* []
                     (f {:card-id card-id, :pulse-id pulse-id}
                        (pulse/send-pulse! (models.pulse/retrieve-notification pulse-id))))
@@ -359,35 +362,28 @@
 
 (deftest csv-test
   (tests {:pulse {:skip_if_empty false}
-          :card  (checkins-query-card {:breakout [!hour.date]})})
-  "1 card, 1 recipient, with CSV attachment"
-  {:assert
-   {:email
-    (fn [_ _]
-      (is (= (add-rasta-attachment (rasta-pulse-email) csv-attachment)
-             (mt/summarize-multipart-email #"Pulse Name"))))}}
+          :card  (checkins-query-card {:breakout [!hour.date]})}
+    "alert with a CSV"
+    {:pulse-card {:include_csv true}
 
-  "alert with a CSV"
-  {:pulse-card {:include_csv true}
+     :assert
+     {:email
+      (fn [_ _]
+        (is (= (rasta-alert-email "Pulse: Pulse Name"
+                                  [test-card-result, png-attachment, csv-attachment])
+               (mt/summarize-multipart-email test-card-regex))))}}
 
-   :assert
-   {:email
-    (fn [_ _]
-      (is (= (rasta-alert-email "Metabase alert: Test card has results"
-                                [test-card-result, png-attachment, csv-attachment])
-             (mt/summarize-multipart-email test-card-regex))))}}
+    "With a \"rows\" type of pulse (table visualization) we should include the CSV by default"
+    {:card {:dataset_query (mt/mbql-query checkins)}
 
-  "With a \"rows\" type of pulse (table visualization) we should include the CSV by default"
-  {:card {:dataset_query (mt/mbql-query checkins)}
-
-   :assert
-   {:email
-    (fn [_ _]
-      (is (= (-> (rasta-pulse-email)
-                 ;; There's no PNG with a table visualization, remove it from the assert results
-                 (update-in ["rasta@metabase.com" 0 :body] (comp vector first))
-                 (add-rasta-attachment csv-attachment))
-             (mt/summarize-multipart-email #"Pulse Name"))))}})
+     :assert
+     {:email
+      (fn [_ _]
+        (is (= (-> (rasta-pulse-email)
+                   ;; There's no PNG with a table visualization, remove it from the assert results
+                   (update-in ["rasta@metabase.com" 0 :body] (comp vector first))
+                   (add-rasta-attachment csv-attachment))
+               (mt/summarize-multipart-email #"Pulse Name"))))}}))
 
 (deftest xls-test
   (testing "If the pulse is already configured to send an XLS, no need to include a CSV"
@@ -769,8 +765,7 @@
                    :fallback               "Test card 2"}]}
                 (thunk->boolean slack-data)))
          (testing "attachments"
-           (is (= true
-                  (every? produces-bytes? (:attachments slack-data))))))))))
+           (is (true? (every? produces-bytes? (:attachments slack-data))))))))))
 
 (deftest multi-channel-test
   (testing "Test with a slack channel and an email"
@@ -810,7 +805,7 @@
                                               :async?   true}}]
       (is (schema= {:card   (s/pred map?)
                     :result (s/pred map?)}
-                   (pulse/execute-card {} card))))))
+                   (pulse/execute-card {:creator_id (mt/user->id :rasta)} card))))))
 
 (deftest pulse-permissions-test
   (testing "Pulses should be sent with the Permissions of the user that created them."

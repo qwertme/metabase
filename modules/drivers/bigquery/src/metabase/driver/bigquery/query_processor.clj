@@ -1,29 +1,25 @@
 (ns metabase.driver.bigquery.query-processor
   (:require [clojure.string :as str]
             [clojure.tools.logging :as log]
-            [honeysql
-             [core :as hsql]
-             [format :as hformat]
-             [helpers :as h]]
+            [honeysql.core :as hsql]
+            [honeysql.format :as hformat]
+            [honeysql.helpers :as h]
             [java-time :as t]
-            [metabase
-             [driver :as driver]
-             [util :as u]]
+            [metabase.driver :as driver]
             [metabase.driver.sql :as sql]
             [metabase.driver.sql.parameters.substitution :as sql.params.substitution]
             [metabase.driver.sql.query-processor :as sql.qp]
             [metabase.driver.sql.util.unprepare :as unprepare]
             [metabase.mbql.util :as mbql.u]
-            [metabase.models
-             [field :refer [Field]]
-             [table :as table]]
-            [metabase.query-processor
-             [error-type :as error-type]
-             [store :as qp.store]]
-            [metabase.util
-             [date-2 :as u.date]
-             [honeysql-extensions :as hx]
-             [i18n :refer [tru]]]
+            [metabase.models.field :refer [Field]]
+            [metabase.models.setting :as setting]
+            [metabase.models.table :as table]
+            [metabase.query-processor.error-type :as error-type]
+            [metabase.query-processor.store :as qp.store]
+            [metabase.util :as u]
+            [metabase.util.date-2 :as u.date]
+            [metabase.util.honeysql-extensions :as hx]
+            [metabase.util.i18n :refer [tru]]
             [schema.core :as s]
             [toucan.db :as db])
   (:import [java.time LocalDate LocalDateTime LocalTime OffsetDateTime OffsetTime ZonedDateTime]
@@ -338,20 +334,25 @@
 (defmethod sql.qp/date [:bigquery :hour]            [_ _ expr] (trunc   :hour      expr))
 (defmethod sql.qp/date [:bigquery :hour-of-day]     [_ _ expr] (extract :hour      expr))
 (defmethod sql.qp/date [:bigquery :day]             [_ _ expr] (trunc   :day       expr))
-(defmethod sql.qp/date [:bigquery :day-of-week]     [_ _ expr] (extract :dayofweek expr))
 (defmethod sql.qp/date [:bigquery :day-of-month]    [_ _ expr] (extract :day       expr))
 (defmethod sql.qp/date [:bigquery :day-of-year]     [_ _ expr] (extract :dayofyear expr))
-(defmethod sql.qp/date [:bigquery :week]            [_ _ expr] (trunc   :week      expr))
-;; ; BigQuery's impl of `week` uses 0 for the first week; we use 1
-(defmethod sql.qp/date [:bigquery :week-of-year]    [_ _ expr] (-> (extract :week  expr) hx/inc))
 (defmethod sql.qp/date [:bigquery :month]           [_ _ expr] (trunc   :month     expr))
 (defmethod sql.qp/date [:bigquery :month-of-year]   [_ _ expr] (extract :month     expr))
 (defmethod sql.qp/date [:bigquery :quarter]         [_ _ expr] (trunc   :quarter   expr))
 (defmethod sql.qp/date [:bigquery :quarter-of-year] [_ _ expr] (extract :quarter   expr))
 (defmethod sql.qp/date [:bigquery :year]            [_ _ expr] (trunc   :year      expr))
 
+(defmethod sql.qp/date [:bigquery :day-of-week]
+  [_ _ expr]
+  (sql.qp/adjust-day-of-week :bigquery (extract :dayofweek expr)))
+
+(defmethod sql.qp/date [:bigquery :week]
+  [_ _ expr]
+  (trunc (keyword (format "week(%s)" (name (setting/get-keyword :start-of-week)))) expr))
+
 (doseq [[unix-timestamp-type bigquery-fn] {:seconds      :timestamp_seconds
-                                           :milliseconds :timestamp_millis}]
+                                           :milliseconds :timestamp_millis
+                                           :microseconds :timestamp_micros}]
   (defmethod sql.qp/unix-timestamp->honeysql [:bigquery unix-timestamp-type]
     [_ _ expr]
     (with-temporal-type (hsql/call bigquery-fn expr) :timestamp)))

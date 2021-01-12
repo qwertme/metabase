@@ -3,21 +3,19 @@
   (:require [cheshire.core :as json]
             [clj-http.client :as http]
             [clojure.test :refer :all]
-            [metabase
-             [email-test :as et]
-             [http-client :as http-client]
-             [public-settings :as public-settings]
-             [test :as mt]
-             [util :as u]]
             [metabase.api.session :as session-api]
             [metabase.driver.h2 :as h2]
-            [metabase.models
-             [session :refer [Session]]
-             [setting :as setting]
-             [user :refer [User]]]
+            [metabase.email-test :as et]
+            [metabase.http-client :as http-client]
+            [metabase.models.session :refer [Session]]
+            [metabase.models.setting :as setting]
+            [metabase.models.user :refer [User]]
+            [metabase.public-settings :as public-settings]
+            [metabase.test :as mt]
             [metabase.test.data.users :as test-users]
             [metabase.test.fixtures :as fixtures]
             [metabase.test.integrations.ldap :as ldap.test]
+            [metabase.util :as u]
             [schema.core :as s]
             [toucan.db :as db])
   (:import clojure.lang.ExceptionInfo
@@ -444,9 +442,9 @@
     (mt/with-temp User [user {:email "cam@sf-toucannery.com"}]
       (mt/with-temporary-setting-values [google-auth-auto-create-accounts-domain "metabase.com"]
         (testing "their account should return a Session"
-          (is (instance?
-               UUID
-               (#'session-api/google-auth-fetch-or-create-user! "Cam" "Saul" "cam@sf-toucannery.com")))))))
+          (is (schema= {:id       UUID
+                        s/Keyword s/Any}
+                       (#'session-api/google-auth-fetch-or-create-user! "Cam" "Saul" "cam@sf-toucannery.com")))))))
 
   (testing "test that a user that doesn't exist with a *different* domain than the auto-create accounts domain gets an exception"
     (mt/with-temporary-setting-values [google-auth-auto-create-accounts-domain nil
@@ -460,9 +458,9 @@
       (mt/with-temporary-setting-values [google-auth-auto-create-accounts-domain "sf-toucannery.com"
                                          admin-email                             "rasta@toucans.com"]
         (try
-          (is (instance?
-               UUID
-               (#'session-api/google-auth-fetch-or-create-user! "Rasta" "Toucan" "rasta@sf-toucannery.com")))
+          (is (schema= {:id       UUID
+                        s/Keyword s/Any}
+                       (#'session-api/google-auth-fetch-or-create-user! "Rasta" "Toucan" "rasta@sf-toucannery.com")))
           (finally
             (db/delete! User :email "rasta@sf-toucannery.com")))))))
 
@@ -472,12 +470,22 @@
 (deftest ldap-login-test
   (ldap.test/with-ldap-server
     (testing "Test that we can login with LDAP"
-      (is (schema= SessionResponse
-                   (mt/client :post 200 "session" (mt/user->credentials :rasta)))))
+      (let [user-id (test-users/user->id :rasta)]
+        (try
+          (db/simple-delete! Session :user_id user-id)
+          (is (schema= SessionResponse
+                       (mt/client :post 200 "session" (mt/user->credentials :rasta))))
+          (finally
+            (db/update! User user-id :login_attributes nil)))))
 
     (testing "Test that login will fallback to local for users not in LDAP"
-      (is (schema= SessionResponse
-                   (mt/client :post 200 "session" (mt/user->credentials :crowberto)))))
+      (mt/with-temporary-setting-values [enable-password-login true]
+        (is (schema= SessionResponse
+                     (mt/client :post 200 "session" (mt/user->credentials :crowberto)))))
+      (testing "...but not if password login is disabled"
+        (mt/with-temporary-setting-values [enable-password-login false]
+          (is (= "Password login is disabled for this instance."
+                 (mt/client :post 400 "session" (mt/user->credentials :crowberto)))))))
 
     (testing "Test that login will NOT fallback for users in LDAP but with an invalid password"
       ;; NOTE: there's a different password in LDAP for Lucky
@@ -486,9 +494,15 @@
 
     (testing "Test that login will fallback to local for broken LDAP settings"
       (mt/with-temporary-setting-values [ldap-user-base "cn=wrong,cn=com"]
-        (is (schema= SessionResponse
-                     (mt/suppress-output
-                       (mt/client :post 200 "session" (mt/user->credentials :rasta)))))))
+        ;; delete all other sessions for the bird first, otherwise test doesn't seem to work (TODO - why?)
+        (let [user-id (test-users/user->id :rasta)]
+          (try
+            (db/simple-delete! Session :user_id user-id)
+            (is (schema= SessionResponse
+                         (mt/suppress-output
+                           (mt/client :post 200 "session" (mt/user->credentials :rasta)))))
+            (finally
+              (db/update! User user-id :login_attributes nil))))))
 
     (testing "Test that we can login with LDAP with new user"
       (try

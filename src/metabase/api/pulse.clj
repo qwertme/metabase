@@ -3,37 +3,38 @@
   (:require [clojure.tools.logging :as log]
             [compojure.core :refer [DELETE GET POST PUT]]
             [hiccup.core :refer [html]]
-            [metabase
-             [email :as email]
-             [events :as events]
-             [pulse :as p]
-             [query-processor :as qp]
-             [util :as u]]
             [metabase.api.common :as api]
+            [metabase.email :as email]
+            [metabase.events :as events]
             [metabase.integrations.slack :as slack]
-            [metabase.models
-             [card :refer [Card]]
-             [collection :as collection]
-             [interface :as mi]
-             [pulse :as pulse :refer [Pulse]]
-             [pulse-channel :refer [channel-types PulseChannel]]
-             [pulse-channel-recipient :refer [PulseChannelRecipient]]]
+            [metabase.models.card :refer [Card]]
+            [metabase.models.collection :as collection]
+            [metabase.models.interface :as mi]
+            [metabase.models.pulse :as pulse :refer [Pulse]]
+            [metabase.models.pulse-channel :refer [channel-types PulseChannel]]
+            [metabase.models.pulse-channel-recipient :refer [PulseChannelRecipient]]
+            [metabase.plugins.classloader :as classloader]
+            [metabase.pulse :as p]
             [metabase.pulse.render :as render]
-            [metabase.util
-             [i18n :refer [tru]]
-             [schema :as su]
-             [urls :as urls]]
+            [metabase.query-processor :as qp]
+            [metabase.util :as u]
+            [metabase.util.i18n :refer [tru]]
+            [metabase.util.schema :as su]
+            [metabase.util.urls :as urls]
             [schema.core :as s]
-            [toucan
-             [db :as db]
-             [hydrate :refer [hydrate]]])
+            [toucan.db :as db]
+            [toucan.hydrate :refer [hydrate]])
   (:import java.io.ByteArrayInputStream))
+
+(u/ignore-exceptions (classloader/require 'metabase-enterprise.sandbox.api.util))
 
 (api/defendpoint GET "/"
   "Fetch all Pulses"
-  [archived]
-  {archived (s/maybe su/BooleanString)}
-  (as-> (pulse/retrieve-pulses {:archived? (Boolean/parseBoolean archived)}) <>
+  [archived dashboard_id]
+  {archived     (s/maybe su/BooleanString)
+   dashboard_id (s/maybe su/IntGreaterThanZero)}
+  (as-> (pulse/retrieve-pulses {:archived?    (Boolean/parseBoolean archived)
+                                :dashboard-id dashboard_id}) <>
     (filter mi/can-read? <>)
     (hydrate <> :can_write)))
 
@@ -81,12 +82,12 @@
 (api/defendpoint PUT "/:id"
   "Update a Pulse with `id`."
   [id :as {{:keys [name cards channels skip_if_empty collection_id archived], :as pulse-updates} :body}]
-  {name          (s/maybe su/NonBlankString)
-   cards         (s/maybe (su/non-empty [pulse/CoercibleToCardRef]))
-   channels      (s/maybe (su/non-empty [su/Map]))
-   skip_if_empty (s/maybe s/Bool)
-   collection_id (s/maybe su/IntGreaterThanZero)
-   archived      (s/maybe s/Bool)}
+  {name           (s/maybe su/NonBlankString)
+   cards          (s/maybe (su/non-empty [pulse/CoercibleToCardRef]))
+   channels       (s/maybe (su/non-empty [su/Map]))
+   skip_if_empty  (s/maybe s/Bool)
+   collection_id  (s/maybe su/IntGreaterThanZero)
+   archived       (s/maybe s/Bool)}
   ;; do various perms checks
   (let [pulse-before-update (api/write-check Pulse id)]
     (check-card-read-permissions cards)
@@ -121,10 +122,17 @@
   (let [chan-types (-> channel-types
                        (assoc-in [:slack :configured] (slack/slack-configured?))
                        (assoc-in [:email :configured] (email/email-configured?)))]
-    {:channels (if-not (get-in chan-types [:slack :configured])
+    {:channels (cond
+                 (when-let [segmented-user? (resolve 'metabase-enterprise.sandbox.api.util/segmented-user?)]
+                   (segmented-user?))
+                 (dissoc chan-types :slack)
+
                  ;; no Slack integration, so we are g2g
+                 (not (get-in chan-types [:slack :configured]))
                  chan-types
+
                  ;; if we have Slack enabled build a dynamic list of channels/users
+                 :else
                  (try
                    (let [slack-channels (for [channel (slack/conversations-list)]
                                           (str \# (:name channel)))
@@ -191,7 +199,7 @@
    collection_id       (s/maybe su/IntGreaterThanZero)
    collection_position (s/maybe su/IntGreaterThanZero)}
   (check-card-read-permissions cards)
-  (p/send-pulse! body)
+  (p/send-pulse! (assoc body :creator_id api/*current-user-id*))
   {:ok true})
 
 (api/defendpoint DELETE "/:id/subscription/email"

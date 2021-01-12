@@ -1,3 +1,4 @@
+// Ported from `segments.e2e.spec.js`
 import {
   restore,
   signInAsAdmin,
@@ -5,7 +6,10 @@ import {
   modal,
   sidebar,
 } from "__support__/cypress";
-// Ported from `segments.e2e.spec.js`
+
+import { SAMPLE_DATASET } from "__support__/cypress_sample_dataset";
+
+const { ORDERS, ORDERS_ID } = SAMPLE_DATASET;
 
 describe("scenarios > admin > datamodel > segments", () => {
   before(restore);
@@ -23,6 +27,21 @@ describe("scenarios > admin > datamodel > segments", () => {
       );
     });
 
+    it.skip("should have 'Custom expression' in a filter list (metabase#13069)", () => {
+      cy.visit("/admin/datamodel/segments");
+      cy.findByText("New segment").click();
+      cy.findByText("Select a table").click();
+      popover().within(() => {
+        cy.findByText("Orders").click();
+      });
+      cy.findByText("Add filters to narrow your answer").click();
+
+      cy.log("**Fails in v0.36.0 and v0.36.3. It exists in v0.35.4**");
+      popover().within(() => {
+        cy.findByText("Custom Expression");
+      });
+    });
+
     it("should show no segments", () => {
       cy.visit("/reference/segments");
       cy.findByText("Segments are interesting subsets of tables");
@@ -31,48 +50,28 @@ describe("scenarios > admin > datamodel > segments", () => {
   });
 
   describe("with segment", () => {
+    const SEGMENT_NAME = "Orders < 100";
+
     before(() => {
-      // CREATES A SEGMENT
       signInAsAdmin();
-      cy.visit("/admin");
-      cy.contains("Data Model").click();
-      cy.contains("Segments").click();
-      cy.contains("New segment").click();
-      cy.contains("Select a table").click();
-      popover()
-        .contains("Orders")
-        .click({ force: true }); // this shouldn't be needed, but there were issues with reordering as loads happeend
 
-      cy.url().should("match", /segment\/create$/);
-      cy.contains("Create Your Segment");
-
-      // filter to orders with total under 100
-      cy.contains("Add filters").click();
-      cy.contains("Total").click();
-      cy.contains("Equal to").click();
-      cy.contains("Less than").click();
-      cy.get('[placeholder="Enter a number"]').type("100");
-      popover()
-        .contains("Add filter")
-        .click();
-
-      cy.contains("12765 rows");
-
-      // fill in name/description
-      cy.get('[name="name"]').type("orders <100");
-      cy.get('[name="description"]').type(
-        "All orders with a total under $100.",
-      );
-
-      // saving bounces you back and you see new segment in the list
-      cy.contains("Save changes").click();
-      cy.url().should("match", /datamodel\/segments$/);
+      // Create a segment through API
+      cy.request("POST", "/api/segment", {
+        name: SEGMENT_NAME,
+        description: "All orders with a total under $100.",
+        table_id: ORDERS_ID,
+        definition: {
+          "source-table": ORDERS_ID,
+          aggregation: [["count"]],
+          filter: ["<", ["field-id", ORDERS.TOTAL], 100],
+        },
+      });
     });
 
     it("should show the segment fields list and detail view", () => {
       // In the list
       cy.visit("/reference/segments");
-      cy.findByText("orders <100");
+      cy.findByText(SEGMENT_NAME);
 
       // Detail view
       cy.visit("/reference/segments/1");
@@ -82,13 +81,13 @@ describe("scenarios > admin > datamodel > segments", () => {
       // Segment fields
       cy.findByText("Fields in this segment").click();
       cy.findByText("See this segment").should("not.exist");
-      cy.findByText("Fields in orders <100");
+      cy.findByText(`Fields in ${SEGMENT_NAME}`);
       cy.findAllByText("Discount");
     });
 
     it("should show up in UI list", () => {
       cy.visit("/admin/datamodel/segments");
-      cy.contains("orders <100");
+      cy.contains(SEGMENT_NAME);
       cy.contains("Filtered by Total");
     });
 
@@ -100,7 +99,7 @@ describe("scenarios > admin > datamodel > segments", () => {
 
     it("should show no questions based on a new segment", () => {
       cy.visit("/reference/segments/1/questions");
-      cy.findByText("Questions about orders <100");
+      cy.findByText(`Questions about ${SEGMENT_NAME}`);
       cy.findByText(
         "Questions about this segment will appear here as they're added",
       );
@@ -110,13 +109,17 @@ describe("scenarios > admin > datamodel > segments", () => {
       // Ask question
       cy.visit("/reference/segments/1/questions");
       cy.get(".full .Button").click();
+      cy.findAllByText("37.65");
       cy.findAllByText("Filter")
         .first()
         .click();
       sidebar().within(() => {
         cy.contains("Product ID").click();
       });
-      cy.findByPlaceholderText("Enter an ID").type("14");
+      cy.findByText("Cancel");
+      cy.findByPlaceholderText("Enter an ID")
+        .click()
+        .type("14", { delay: 100 });
       cy.findByText("Add filter").click();
       cy.findByText("Product ID is 14");
       cy.findByText("Save").click();
@@ -129,7 +132,7 @@ describe("scenarios > admin > datamodel > segments", () => {
       cy.findByText(
         "Questions about this segment will appear here as they're added",
       ).should("not.exist");
-      cy.findByText("Orders, Filtered by orders <100 and Product");
+      cy.findByText(`Orders, Filtered by ${SEGMENT_NAME} and Product`);
     });
 
     it("should update that segment", () => {
@@ -137,7 +140,7 @@ describe("scenarios > admin > datamodel > segments", () => {
       cy.contains("Data Model").click();
       cy.contains("Segments").click();
 
-      cy.contains("orders <100")
+      cy.contains(SEGMENT_NAME)
         .parent()
         .parent()
         .find(".Icon-ellipsis")
@@ -167,7 +170,7 @@ describe("scenarios > admin > datamodel > segments", () => {
       // update name and description, set a revision note, and save the update
       cy.get('[name="name"]')
         .clear()
-        .type("orders >10");
+        .type("Orders > 10");
       cy.get('[name="description"]')
         .clear()
         .type("All orders with a total over $10.");
@@ -176,10 +179,10 @@ describe("scenarios > admin > datamodel > segments", () => {
 
       // get redirected to previous page and see the new segment name
       cy.url().should("match", /datamodel\/segments$/);
-      cy.contains("orders >10");
+      cy.contains("Orders > 10");
 
       // clean up
-      cy.contains("orders >10")
+      cy.contains("Orders > 10")
         .parent()
         .parent()
         .find(".Icon-ellipsis")

@@ -1,25 +1,20 @@
 (ns metabase.driver.sqlite
   (:require [clojure.string :as str]
-            [honeysql
-             [core :as hsql]
-             [format :as hformat]]
+            [honeysql.core :as hsql]
+            [honeysql.format :as hformat]
             [java-time :as t]
-            [metabase
-             [config :as config]
-             [driver :as driver]]
-            [metabase.driver
-             [common :as driver.common]
-             [sql :as sql]]
-            [metabase.driver.sql-jdbc
-             [connection :as sql-jdbc.conn]
-             [execute :as sql-jdbc.execute]
-             [sync :as sql-jdbc.sync]]
+            [metabase.config :as config]
+            [metabase.driver :as driver]
+            [metabase.driver.common :as driver.common]
+            [metabase.driver.sql :as sql]
+            [metabase.driver.sql-jdbc.connection :as sql-jdbc.conn]
+            [metabase.driver.sql-jdbc.execute :as sql-jdbc.execute]
+            [metabase.driver.sql-jdbc.sync :as sql-jdbc.sync]
             [metabase.driver.sql.parameters.substitution :as params.substitution]
             [metabase.driver.sql.query-processor :as sql.qp]
             [metabase.query-processor.timezone :as qp.timezone]
-            [metabase.util
-             [date-2 :as u.date]
-             [honeysql-extensions :as hx]]
+            [metabase.util.date-2 :as u.date]
+            [metabase.util.honeysql-extensions :as hx]
             [schema.core :as s])
   (:import [java.sql Connection ResultSet Types]
            [java.time LocalDate LocalDateTime LocalTime OffsetDateTime OffsetTime ZonedDateTime]
@@ -43,6 +38,10 @@
 ;; HACK SQLite doesn't support ALTER TABLE ADD CONSTRAINT FOREIGN KEY and I don't have all day to work around this so
 ;; for now we'll just skip the foreign key stuff in the tests.
 (defmethod driver/supports? [:sqlite :foreign-keys] [_ _] (not config/is-test?))
+
+(defmethod driver/db-start-of-week :sqlite
+  [_]
+  :sunday)
 
 (defmethod sql-jdbc.conn/connection-details->spec :sqlite
   [_ {:keys [db]
@@ -78,6 +77,14 @@
   [_ database-type]
   (database-type->base-type database-type))
 
+;; The normal SELECT * FROM table WHERE 1 <> 1 LIMIT 0 query doesn't return any information for SQLite views -- it
+;; seems to be the case that the query has to return at least one row
+(defmethod sql-jdbc.sync/fallback-metadata-query :sqlite
+  [driver schema table]
+  (sql.qp/format-honeysql driver {:select [:*]
+                                  :from   [(sql.qp/->honeysql driver (hx/identifier :table schema table))]
+                                  :limit  1}))
+
 ;; register the SQLite concatnation operator `||` with HoneySQL as `sqlite-concat`
 ;; (hsql/format (hsql/call :sqlite-concat :a :b)) -> "(a || b)"
 (defmethod hformat/fn-handler "sqlite-concat"
@@ -86,6 +93,7 @@
 
 (def ^:private ->date     (partial hsql/call :date))
 (def ^:private ->datetime (partial hsql/call :datetime))
+(def ^:private ->time     (partial hsql/call :time))
 
 (defn- strftime [format-str expr]
   (hsql/call :strftime (hx/literal format-str) expr))
@@ -123,7 +131,7 @@
 ;; SQLite day of week (%w) is Sunday = 0 <-> Saturday = 6. We want 1 - 7 so add 1
 (defmethod sql.qp/date [:sqlite :day-of-week]
   [driver _ expr]
-  (hx/->integer (hx/inc (strftime "%w" (sql.qp/->honeysql driver expr)))))
+  (sql.qp/adjust-day-of-week :sqlite (hx/->integer (hx/inc (strftime "%w" (sql.qp/->honeysql driver expr))))))
 
 (defmethod sql.qp/date [:sqlite :day-of-month]
   [driver _ expr]
@@ -133,15 +141,14 @@
   [driver _ expr]
   (hx/->integer (strftime "%j" (sql.qp/->honeysql driver expr))))
 
-;; Move back 6 days, then forward to the next Sunday
 (defmethod sql.qp/date [:sqlite :week]
-  [driver _ expr]
-  (->date (sql.qp/->honeysql driver expr) (hx/literal "-6 days") (hx/literal "weekday 0")))
-
-;; SQLite first week of year is 0, so add 1
-(defmethod sql.qp/date [:sqlite :week-of-year]
-  [driver _ expr]
-  (hx/->integer (hx/inc (strftime "%W" (sql.qp/->honeysql driver expr)))))
+  [_ _ expr]
+  (let [week-extract-fn (fn [expr]
+                          ;; Move back 6 days, then forward to the next Sunday
+                          (->date (sql.qp/->honeysql :sqlite expr)
+                                  (hx/literal "-6 days")
+                                  (hx/literal "weekday 0")))]
+    (sql.qp/adjust-start-of-week :sqlite week-extract-fn expr)))
 
 (defmethod sql.qp/date [:sqlite :month]
   [driver _ expr]
@@ -208,6 +215,18 @@
 (defmethod sql.qp/unix-timestamp->honeysql [:sqlite :seconds]
   [_ _ expr]
   (->datetime expr (hx/literal "unixepoch")))
+
+(defmethod sql.qp/cast-temporal-string [:sqlite :type/ISO8601DateTimeString]
+  [_driver _special_type expr]
+  (->datetime expr))
+
+(defmethod sql.qp/cast-temporal-string [:sqlite :type/ISO8601DateString]
+  [_driver _special_type expr]
+  (->date expr))
+
+(defmethod sql.qp/cast-temporal-string [:sqlite :type/ISO8601TimeString]
+  [_driver _special_type expr]
+  (->time expr))
 
 ;; SQLite doesn't like Temporal values getting passed in as prepared statement args, so we need to convert them to
 ;; date literal strings instead to get things to work

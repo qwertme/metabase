@@ -20,9 +20,11 @@
     <meta name="base-href" content="{{{baseHref}}}" />
     <meta name="uri" content="{{{uri}}}" />
 
+    <link rel="icon" href="{{{favicon}}}" />
+
     {{{embedCode}}}
 
-    <title>Metabase</title>
+    <title>{{{applicationName}}}</title>
 
     <base href="{{{baseHref}}}" />
 
@@ -34,7 +36,7 @@
       {{{localizationJSON}}}
     </script>
 
-    <!-- If you modify this script, make sure you update the whitelisted Content-Security-Policy hash in metabase.middleware.security -->
+    <!-- If you modify this script, make sure you update the whitelisted Content-Security-Policy hash in metabase.server.middleware.security -->
     <script type="text/javascript">{{{bootstrapJS}}}</script>
   </head>
 
@@ -47,7 +49,7 @@
     {{/enableGoogleAuth}}
 
     <!-- Google Analytics -->
-    <!-- If you modify this script, make sure you update the whitelisted Content-Security-Policy hash in metabase.middleware.security -->
+    <!-- If you modify this script, make sure you update the whitelisted Content-Security-Policy hash in metabase.server.middleware.security -->
     {{#enableAnonTracking}}
       <script type="text/javascript">{{{googleAnalyticsJS}}}</script>
     {{/enableAnonTracking}}

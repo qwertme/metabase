@@ -1,15 +1,13 @@
 (ns metabase.query-processor-test.expressions-test
   "Tests for expressions (calculated columns)."
-  (:require [clojure
-             [string :as str]
-             [test :refer :all]]
-            [clojure.java.jdbc :as jdbc]
+  (:require [clojure.java.jdbc :as jdbc]
+            [clojure.string :as str]
+            [clojure.test :refer :all]
             [java-time :as t]
-            [metabase
-             [driver :as driver]
-             [query-processor-test :as qp.test]
-             [sync :as sync]
-             [test :as mt]]
+            [metabase.driver :as driver]
+            [metabase.query-processor-test :as qp.test]
+            [metabase.sync :as sync]
+            [metabase.test :as mt]
             [metabase.test.data.one-off-dbs :as one-off-dbs]
             [metabase.util.date-2 :as u.date]))
 
@@ -311,3 +309,20 @@
                 :limit       3
                 :order-by    [[:asc $id]]})))
         "Make sure an expression with a / in its name works")))
+
+;; https://github.com/metabase/metabase/issues/12762
+(deftest expression-using-aggregation-test
+  (mt/test-drivers (mt/normal-drivers-with-feature :expressions)
+    (testing "Can we use aggregations from previous steps in expressions"
+      (is (= [["20th Century Cafe" 2 2 0]
+              [ "25°" 2 2 0 ]
+              ["33 Taps" 2 2 0]]
+             (mt/formatted-rows [str int int int]
+               (mt/run-mbql-query venues
+                 {:source-query {:source-table (mt/id :venues)
+                                 :aggregation  [[:min (mt/id :venues :price)]
+                                                [:max (mt/id :venues :price)]]
+                                 :breakout     [[:field-id (mt/id :venues :name)]]}
+                  :expressions  {:price-range [:- [:field-literal "max" :type/Number]
+                                               [:field-literal "min" :type/Number]]}
+                  :limit        3})))))))

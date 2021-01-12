@@ -1,28 +1,24 @@
 (ns metabase.api.table-test
   "Tests for /api/table endpoints."
   (:require [cheshire.core :as json]
-            [clojure
-             [test :refer :all]
-             [walk :as walk]]
+            [clojure.test :refer :all]
+            [clojure.walk :as walk]
             [medley.core :as m]
-            [metabase
-             [http-client :as http]
-             [models :refer [Card Database Field FieldValues Table]]
-             [sync :as sync]
-             [test :as mt]
-             [util :as u]]
             [metabase.api.table :as table-api]
             [metabase.driver.util :as driver.u]
-            [metabase.middleware.util :as middleware.u]
-            [metabase.models
-             [permissions :as perms]
-             [permissions-group :as perms-group]
-             [table :as table]]
-            [metabase.test
-             [data :as data]
-             [util :as tu]]
+            [metabase.http-client :as http]
+            [metabase.models :refer [Card Database Field FieldValues Table]]
+            [metabase.models.permissions :as perms]
+            [metabase.models.permissions-group :as perms-group]
+            [metabase.models.table :as table]
+            [metabase.server.middleware.util :as middleware.u]
+            [metabase.sync :as sync]
+            [metabase.test :as mt]
+            [metabase.test.data :as data]
             [metabase.test.mock.util :as mutil]
+            [metabase.test.util :as tu]
             [metabase.timeseries-query-processor-test.util :as tqpt]
+            [metabase.util :as u]
             [toucan.db :as db]))
 
 ;; ## /api/org/* AUTHENTICATION Tests
@@ -50,6 +46,7 @@
     :cache_field_values_schedule "0 50 0 * * ? *"
     :metadata_sync_schedule      "0 50 * * * ? *"
     :options                     nil
+    :refingerprint               nil
     :auto_run_queries            true}))
 
 (defn- table-defaults []
@@ -519,8 +516,7 @@
 
 (deftest query-metadata-remappings-test
   (testing "GET /api/table/:id/query_metadata"
-    (mt/with-temp-objects
-      (data/create-venue-category-remapping! "Foo")
+    (data/with-venue-category-remapping "Foo"
       (testing "Ensure internal remapped dimensions and human_readable_values are returned"
         (is (= [{:table_id   (mt/id :venues)
                  :id         (mt/id :venues :category_id)
@@ -551,8 +547,7 @@
                   (narrow-fields ["PRICE" "CATEGORY_ID"]
                                  ((mt/user->client :rasta) :get 200 (format "table/%d/query_metadata" (mt/id :venues))))))))))
 
-    (mt/with-temp-objects
-      (data/create-venue-category-fk-remapping! "Foo")
+    (data/with-venue-category-fk-remapping "Foo"
       (testing "Ensure FK remappings are returned"
         (is (= [{:table_id   (mt/id :venues)
                  :id         (mt/id :venues :category_id)
@@ -661,11 +656,12 @@
           (letfn [(dimension-options []
                     (let [response ((mt/user->client :crowberto) :get 200 (format "table/card__%d/query_metadata" (u/get-id card)))]
                       (map #(dimension-options-for-field response %) ["latitude" "longitude"])))]
-            (testing "Nested queries missing a fingerprint should not show binning-options"
-              ;; By default result_metadata will be nil (and no fingerprint). Just asking for query_metadata after the
-              ;; card was created but before it was ran should not allow binning
-              (is (= [nil nil]
-                     (dimension-options))))
+            (testing "Nested queries missing a fingerprint/results metadata should not show binning-options"
+              (mt/with-temp-vals-in-db Card (:id card) {:result_metadata nil}
+                ;; By default result_metadata will be nil (and no fingerprint). Just asking for query_metadata after the
+                ;; card was created but before it was ran should not allow binning
+                (is (= [nil nil]
+                       (dimension-options)))))
 
             (testing "Nested queries with a fingerprint should have dimension options for binning"
               ;; run the Card which will populate its result_metadata column

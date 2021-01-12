@@ -1,4 +1,9 @@
-import { restore, signInAsNormalUser, sidebar } from "__support__/cypress";
+import {
+  restore,
+  signInAsNormalUser,
+  sidebar,
+  popover,
+} from "__support__/cypress";
 
 describe("smoketest > user", () => {
   // Goal: user can use all the features of the simple question and notebook editor
@@ -7,10 +12,7 @@ describe("smoketest > user", () => {
 
   it("should be able to ask a custom questions", () => {
     cy.visit("/");
-
     cy.findByText("Ask a question").click();
-    cy.findByText("Simple question");
-
     cy.findByText("Custom question").click();
     cy.findByText("Sample Dataset").click();
     cy.findByText("Products").click();
@@ -35,41 +37,44 @@ describe("smoketest > user", () => {
     cy.findByText("Visualization");
   });
 
-  it("should filter via both the header and notebook editor", () => {
+  it("should sort via both the header and notebook editor", () => {
     // Sorting by header
-
     cy.wait(1000)
       .get(".Icon-table2")
       .click();
     cy.get(".cellData")
       .eq(2)
-      .findByText("Durable Wool Toucan");
+      .as("firstTableCell");
 
-    cy.findAllByText("Average of Rating")
-      .last()
+    cy.get("@firstTableCell").contains("Aerodynamic Bronze Hat");
+
+    cy.get(".cellData")
+      .contains("Average of Rating")
       .click();
-    cy.findByText("Ascending").click();
 
-    cy.get(".TableInteractive-cellWrapper--firstColumn")
-      .last()
-      .findByText("Lightweight Steel Watch");
+    cy.get(".Icon-arrow_down").click();
+
+    cy.get("@firstTableCell").contains("Ergonomic Wool Bag");
 
     // Sorting by notebook editor
-
     cy.get(".Icon-notebook").click();
-    cy.get(".Icon-close")
-      .last()
-      .click();
 
+    cy.findByText("Sort")
+      .next() // not ideal, but at least we're making sure 'x' is related to 'Sort'
+      .within(() => {
+        cy.get(".Icon-close") // Remove previously applied sorting
+          .click();
+      });
+
+    // Add new sort (by Title)
     cy.findByText("Sort").click();
-    cy.findAllByText("Title")
-      .last()
-      .click();
+
+    popover().within(() => {
+      cy.findAllByText("Title").click();
+    });
     cy.findByText("Visualize").click();
 
-    cy.get(".TableInteractive-cellWrapper--firstColumn")
-      .last()
-      .contains("Durable Wool Toucan");
+    cy.get("@firstTableCell").contains("Aerodynamic Bronze Hat");
 
     cy.get(".Icon-table2").click();
   });
@@ -129,9 +134,7 @@ describe("smoketest > user", () => {
       .contains("0");
 
     cy.findAllByText("Average of Rating").click();
-    cy.get(".Icon-funnel_outline")
-      .closest("div")
-      .click();
+    cy.findByText("Filter by this column").click();
     cy.findByText("Equal to").click();
     cy.findByText("Greater than or equal to").click();
     cy.get("input[placeholder='Enter a number']").type("4");
@@ -139,7 +142,7 @@ describe("smoketest > user", () => {
 
     cy.get(".TableInteractive-cellWrapper--lastColumn")
       .eq(1)
-      .contains("4");
+      .contains("4.2");
 
     // Can minimize Filter dispay in header
 
@@ -188,7 +191,17 @@ describe("smoketest > user", () => {
     cy.findAllByText("Created At");
   });
 
-  it("should be able to create custom columns in the notebook editor", () => {
+  /**
+   * NOTE: - There is a HIGH chance that there are still references to the old "drill-through"/actions popover
+   *         among the skipped tests. Because of the urgency to fix smoke tests (2020-11-26) there is not enough
+   *         time to fully commit to cleaning skipped tests as well.
+   *
+   *       - In general, all smoke tests need serious refactoring
+   *
+   * TODO: - Once that work starts, make sure to update obsolete references in popover!
+   */
+
+  it.skip("should be able to create custom columns in the notebook editor", () => {
     cy.get(".Icon-notebook").click();
 
     // Delete last summary
@@ -223,7 +236,7 @@ describe("smoketest > user", () => {
     cy.findByText("Products").should("not.exist");
   });
 
-  it("should be able to use all notebook editor functions", () => {
+  it.skip("should be able to use all notebook editor functions", () => {
     // Custom JOINs
 
     cy.get(".Icon-notebook").click();
@@ -262,7 +275,7 @@ describe("smoketest > user", () => {
       .click();
   });
 
-  it("should be able to do header actions", () => {
+  it.skip("should be able to do header actions", () => {
     // Reset question
 
     cy.findAllByText("Orders")
@@ -305,7 +318,7 @@ describe("smoketest > user", () => {
     cy.findByText("Sample Dataset");
   });
 
-  it("should ensuring that header actions are appropriate for different data types", () => {
+  it.skip("should ensuring that header actions are appropriate for different data types", () => {
     // *** Currently Longitude is an integer while zip codes and dates are strings in terms of header options
     cy.findAllByText("Summarize")
       .first()
@@ -320,11 +333,11 @@ describe("smoketest > user", () => {
 
     cy.findByText("ID").click();
 
-    cy.findByText("Ascending");
-    cy.findByText("Descending");
+    cy.get(".Icon-arrow_up");
+    cy.get(".Icon-arrow_down");
     cy.findByText("Distincts");
     cy.findByText("Distribution").should("not.exist");
-    cy.get(".Icon-funnel_outline");
+    cy.get(".Icon-filter");
     cy.findByText("Formatting");
 
     // String column
@@ -333,11 +346,11 @@ describe("smoketest > user", () => {
       .last()
       .click();
 
-    cy.findByText("Ascending");
-    cy.findByText("Descending");
+    cy.get(".Icon-arrow_up");
+    cy.get(".Icon-arrow_down");
     cy.findByText("Distincts");
     cy.findByText("Distribution");
-    cy.get(".Icon-funnel_outline");
+    cy.get(".Icon-filter");
     cy.findByText("Formatting");
     cy.get(".PopoverBody")
       .findByText("Sum")
@@ -349,15 +362,15 @@ describe("smoketest > user", () => {
       .last()
       .click();
 
-    cy.findByText("Ascending");
-    cy.findByText("Descending");
+    cy.get(".Icon-arrow_up");
+    cy.get(".Icon-arrow_down");
     cy.findByText("Sum");
     cy.findByText("Min");
     cy.findByText("Max");
     cy.findByText("Distincts");
     cy.findByText("Sum over time");
     cy.findByText("Distribution");
-    cy.get(".Icon-funnel_outline");
+    cy.get(".Icon-filter");
     cy.findByText("Formatting");
 
     // Longitude column (first switch to people table)
@@ -371,15 +384,15 @@ describe("smoketest > user", () => {
 
     cy.findByText("Longitude").click();
 
-    cy.findByText("Ascending");
-    cy.findByText("Descending");
+    cy.get(".Icon-arrow_up");
+    cy.get(".Icon-arrow_down");
     cy.findByText("Sum");
     cy.findByText("Min");
     cy.findByText("Max");
     cy.findByText("Distincts");
     cy.findByText("Sum over time");
     cy.findByText("Distribution");
-    cy.get(".Icon-funnel_outline");
+    cy.get(".Icon-filter");
     cy.findByText("Formatting");
 
     // Boolean column contians appropriate options

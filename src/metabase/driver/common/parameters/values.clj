@@ -11,22 +11,19 @@
   (:require [clojure.string :as str]
             [clojure.tools.logging :as log]
             [metabase.driver.common.parameters :as i]
-            [metabase.models
-             [card :refer [Card]]
-             [field :refer [Field]]
-             [native-query-snippet :refer [NativeQuerySnippet]]]
+            [metabase.models.card :refer [Card]]
+            [metabase.models.field :refer [Field]]
+            [metabase.models.native-query-snippet :refer [NativeQuerySnippet]]
             [metabase.query-processor :as qp]
             [metabase.query-processor.error-type :as qp.error-type]
-            [metabase.util
-             [i18n :refer [deferred-tru tru]]
-             [schema :as su]]
+            [metabase.util.i18n :refer [deferred-tru tru]]
+            [metabase.util.schema :as su]
             [schema.core :as s]
             [toucan.db :as db])
   (:import clojure.lang.ExceptionInfo
            java.text.NumberFormat
            java.util.UUID
-           [metabase.driver.common.parameters CommaSeparatedNumbers FieldFilter MultipleValues ReferencedCardQuery
-            ReferencedQuerySnippet]))
+           [metabase.driver.common.parameters CommaSeparatedNumbers FieldFilter MultipleValues ReferencedCardQuery ReferencedQuerySnippet]))
 
 (def ^:private ParamType
   (s/enum :number
@@ -59,7 +56,7 @@
 (def ^:private TagParam
   "Schema for a tag parameter declaration, passed in as part of the `:template-tags` list."
   (s/named
-   {(s/optional-key :id)           su/NonBlankString ; this is used internally by the frontend
+   {(s/optional-key :id)           su/NonBlankString     ; this is used internally by the frontend
     :name                          su/NonBlankString
     :display-name                  su/NonBlankString
     :type                          ParamType
@@ -68,9 +65,10 @@
     (s/optional-key :snippet-name) su/NonBlankString
     (s/optional-key :snippet-id)   su/IntGreaterThanZero
     (s/optional-key :database)     su/IntGreaterThanZero ; used by tags of `:type :snippet`
-    (s/optional-key :widget-type)  s/Keyword ; type of the [default] value if `:type` itself is `dimension`
+    (s/optional-key :widget-type)  s/Keyword             ; type of the [default] value if `:type` itself is `dimension`
     (s/optional-key :required)     s/Bool
-    (s/optional-key :default)      s/Any}
+    (s/optional-key :default)      s/Any
+    s/Keyword                      s/Any}
    "valid template-tags tag"))
 
 (def ^:private ParsedParamValue
@@ -308,7 +306,7 @@
 (s/defn ^:private value-for-tag :- ParsedParamValue
   "Given a map `tag` (a value in the `:template-tags` dictionary) return the corresponding value from the `params`
    sequence. The `value` is something that can be compiled to SQL via `->replacement-snippet-info`."
-  [tag :- TagParam, params :- (s/maybe [i/ParamValue])]
+  [tag :- TagParam params :- (s/maybe [i/ParamValue])]
   (try
     (parse-value-for-type (:type tag) (parse-tag tag params))
     (catch Throwable e

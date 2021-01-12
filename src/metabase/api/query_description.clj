@@ -1,13 +1,12 @@
 (ns metabase.api.query-description
   "Functions for generating human friendly query descriptions"
   (:require [clojure.string :as str]
-            [metabase.mbql
-             [predicates :as mbql.preds]
-             [util :as mbql.u]]
-            [metabase.models
-             [field :refer [Field]]
-             [metric :refer [Metric]]
-             [segment :refer [Segment]]]
+            [clojure.tools.logging :as log]
+            [metabase.mbql.predicates :as mbql.preds]
+            [metabase.mbql.util :as mbql.u]
+            [metabase.models.field :refer [Field]]
+            [metabase.models.metric :refer [Metric]]
+            [metabase.models.segment :refer [Segment]]
             [metabase.util.i18n :as ui18n :refer [deferred-tru]]))
 
 (defn- get-table-description
@@ -29,11 +28,13 @@
                              [(operator :guard #{:+ :- :/ :*}) & args]
                              (interpose (name operator) (map field-name args))
 
-                             [:metric arg]    {:type :metric
-                                               :arg  (let [metric (Metric arg)]
-                                                       (if (not (str/blank? (:name metric)))
-                                                         (:name metric)
-                                                         (deferred-tru "[Unknown Metric]")))}
+                             [:metric (arg :guard integer?)]
+                             {:type :metric
+                              :arg  (let [metric (Metric arg)]
+                                      (if (not (str/blank? (:name metric)))
+                                        (:name metric)
+                                        (deferred-tru "[Unknown Metric]")))}
+
                              [:rows]          {:type :rows}
                              [:count]         {:type :count}
                              [:cum-count]     {:type :cum-count}
@@ -109,6 +110,10 @@
 
   This data structure allows the UI to format the strings appropriately (including JSX)"
   [metadata query]
-  (apply merge
-         (map (fn [f] (f metadata query))
-              query-descriptor-functions)))
+  (try
+    (apply merge
+           (map (fn [f] (f metadata query))
+                query-descriptor-functions))
+    (catch Exception e
+      (log/warn e "Error generating query description")
+      {})))

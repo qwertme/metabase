@@ -2,15 +2,13 @@
   (:require [cheshire.generate :refer [add-encoder encode-map]]
             [clojure.set :as set]
             [medley.core :as m]
-            [metabase.models
-             [interface :as i]
-             [pulse-channel-recipient :refer [PulseChannelRecipient]]
-             [user :as user :refer [User]]]
+            [metabase.models.interface :as i]
+            [metabase.models.pulse-channel-recipient :refer [PulseChannelRecipient]]
+            [metabase.models.user :as user :refer [User]]
             [metabase.util :as u]
             [schema.core :as s]
-            [toucan
-             [db :as db]
-             [models :as models]]))
+            [toucan.db :as db]
+            [toucan.models :as models]))
 
 ;; ## Static Definitions
 
@@ -94,7 +92,7 @@
            :fields            [{:name        "channel"
                                 :type        "select"
                                 :displayName "Post to"
-                                :options     ["#general"]
+                                :options     []
                                 :required    true}]}})
 
 (defn channel-type?
@@ -242,11 +240,12 @@
 (defn create-pulse-channel!
   "Create a new `PulseChannel` along with all related data associated with the channel such as
   `PulseChannelRecipients`."
-  [{:keys [channel_type details pulse_id recipients schedule_type schedule_day schedule_hour schedule_frame]
+  [{:keys [channel_type details enabled pulse_id recipients schedule_type schedule_day schedule_hour schedule_frame]
     :or   {details          {}
            recipients       []}}]
   {:pre [(channel-type? channel_type)
          (integer? pulse_id)
+         (boolean? enabled)
          (schedule-type? schedule_type)
          (valid-schedule? schedule_type schedule_hour schedule_day schedule_frame)
          (coll? recipients)
@@ -257,6 +256,7 @@
                        :channel_type   channel_type
                        :details        (cond-> details
                                          (supports-recipients? channel_type) (assoc :emails (get recipients-by-type false)))
+                       :enabled        enabled
                        :schedule_type  schedule_type
                        :schedule_hour  (when (not= schedule_type :hourly)
                                          schedule_hour)

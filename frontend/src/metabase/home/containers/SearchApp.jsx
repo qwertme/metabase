@@ -12,8 +12,8 @@ import Database from "metabase/entities/databases";
 import Card from "metabase/components/Card";
 import EmptyState from "metabase/components/EmptyState";
 import EntityItem from "metabase/components/EntityItem";
-import Subhead from "metabase/components/Subhead";
-import { FILTERS } from "metabase/components/ItemTypeFilterBar";
+import Subhead from "metabase/components/type/Subhead";
+import { FILTERS } from "metabase/collections/components/ItemTypeFilterBar";
 
 import { color } from "metabase/lib/colors";
 import Icon from "metabase/components/Icon";
@@ -167,7 +167,7 @@ const SearchResultSection = ({ title, items }) => (
           extraInfo = (
             <div className="inline-block">
               <Flex align="center" color={color("text-medium")}>
-                <Icon name="all" size={10} mr="4px" />
+                <Icon name="folder" size={10} mr="4px" />
                 <span
                   className="text-small text-bold"
                   style={{ lineHeight: 1 }}

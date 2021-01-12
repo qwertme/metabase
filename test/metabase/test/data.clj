@@ -33,23 +33,19 @@
       ;; -> {:source-table (data/id :venues), :fields [(data/id :venues :name)]}
 
      (There are several variations of this macro; see documentation below for more details.)"
-  (:require [cheshire.core :as json]
-            [clojure.test :as t]
+  (:require [clojure.test :as t]
             [colorize.core :as colorize]
             [medley.core :as m]
-            [metabase
-             [query-processor :as qp]
-             [util :as u]]
             [metabase.driver.util :as driver.u]
-            [metabase.models
-             [dimension :refer [Dimension]]
-             [field-values :refer [FieldValues]]]
-            [metabase.test.data
-             [dataset-definitions :as defs]
-             [impl :as impl]
-             [interface :as tx]
-             [mbql-query-impl :as mbql-query-impl]]
-            [toucan.db :as db]))
+            [metabase.models.dimension :refer [Dimension]]
+            [metabase.models.field-values :refer [FieldValues]]
+            [metabase.query-processor :as qp]
+            [metabase.test.data.dataset-definitions :as defs]
+            [metabase.test.data.impl :as impl]
+            [metabase.test.data.interface :as tx]
+            [metabase.test.data.mbql-query-impl :as mbql-query-impl]
+            [metabase.util :as u]
+            [toucan.util.test :as tt]))
 
 ;;; ------------------------------------------ Dataset-Independent Data Fns ------------------------------------------
 
@@ -113,7 +109,7 @@
 
     *  Only symbols that end in alphanumeric characters will be parsed, so as to avoid accidentally parsing things that
        do not refer to Fields."
-  {:style/indent 1}
+  {:style/indent [:defn 1]}
   ([form]
    `($ids nil ~form))
 
@@ -244,11 +240,6 @@
   [& body]
   `(impl/do-with-temp-copy-of-db (fn [] ~@body)))
 
-(defmacro with-temp-objects
-  "Calls `data-load-fn` to create a sequence of Toucan objects, then runs `body`; finally, deletes the objects."
-  [data-load-fn & body]
-  `(impl/do-with-temp-objects ~data-load-fn (fn [] ~@body)))
-
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                          Rarely-Used Helper Functions                                          |
@@ -289,25 +280,24 @@
 (def ^:private category-names
   (delay (vec (dataset-field-values "categories" "name"))))
 
-;; TODO - you should always call these functions with the `with-data` macro. We should enforce this
-(defn create-venue-category-remapping!
-  "Returns a thunk that adds an internal remapping for category_id in the venues table aliased as `remapping-name`.
-  Can be used in a `with-data` invocation."
-  [remapping-name]
-  (fn []
-    [(db/insert! Dimension {:field_id (id :venues :category_id)
-                            :name     remapping-name
-                            :type     :internal})
-     (db/insert! FieldValues {:field_id              (id :venues :category_id)
-                              :values                (json/generate-string (range 1 (inc (count @category-names))))
-                              :human_readable_values (json/generate-string @category-names)})]))
+(defn do-with-venue-category-remapping [remapping-name thunk]
+  (tt/with-temp* [Dimension   [_ {:field_id (id :venues :category_id)
+                                  :name     remapping-name
+                                  :type     :internal}]
+                  FieldValues [_ {:field_id              (id :venues :category_id)
+                                  :values                (range 1 (inc (count @category-names)))
+                                  :human_readable_values @category-names}]]
+    (thunk)))
 
-(defn create-venue-category-fk-remapping!
-  "Returns a thunk that adds a FK remapping for category_id in the venues table aliased as `remapping-name`. Can be
-  used in a `with-data` invocation."
-  [remapping-name]
-  (fn []
-    [(db/insert! Dimension {:field_id                (id :venues :category_id)
-                            :name                    remapping-name
-                            :type                    :external
-                            :human_readable_field_id (id :categories :name)})]))
+(defmacro with-venue-category-remapping [remapping-name & body]
+  `(do-with-venue-category-remapping ~remapping-name (fn [] ~@body)))
+
+(defn do-with-venue-category-fk-remapping [remapping-name thunk]
+  (tt/with-temp Dimension [_ {:field_id                (id :venues :category_id)
+                              :name                    remapping-name
+                              :type                    :external
+                              :human_readable_field_id (id :categories :name)}]
+    (thunk)))
+
+(defmacro with-venue-category-fk-remapping [remapping-name & body]
+  `(do-with-venue-category-fk-remapping ~remapping-name (fn [] ~@body)))

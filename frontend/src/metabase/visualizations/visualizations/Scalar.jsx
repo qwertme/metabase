@@ -159,6 +159,7 @@ export default class Scalar extends Component {
       // title: t`Multiply by a number`,
       // widget: "number",
     },
+    click_behavior: {},
   };
 
   _getColumnIndex(cols: Column[], settings: VisualizationSettings) {
@@ -205,10 +206,17 @@ export default class Scalar extends Component {
     // use the compact version of formatting if the component is narrower than
     // the cutoff and the formatted value is longer than the cutoff
     const displayCompact =
-      fullScalarValue.length > COMPACT_MIN_LENGTH && width < COMPACT_MAX_WIDTH;
+      fullScalarValue !== null &&
+      fullScalarValue.length > COMPACT_MIN_LENGTH &&
+      width < COMPACT_MAX_WIDTH;
     const displayValue = displayCompact ? compactScalarValue : fullScalarValue;
 
-    const clicked = { value, column };
+    const clicked = {
+      value,
+      column,
+      data: rows[0].map((value, index) => ({ value, col: cols[index] })),
+      settings,
+    };
     const isClickable = visualizationIsClickable(clicked);
 
     return (

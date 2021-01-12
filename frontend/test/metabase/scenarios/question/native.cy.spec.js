@@ -3,8 +3,11 @@ import {
   restore,
   popover,
   modal,
-  withSampleDataset,
 } from "__support__/cypress";
+
+import { SAMPLE_DATASET } from "__support__/cypress_sample_dataset";
+
+const { ORDERS } = SAMPLE_DATASET;
 
 describe("scenarios > question > native", () => {
   before(restore);
@@ -158,36 +161,34 @@ describe("scenarios > question > native", () => {
   });
 
   it("can load a question with a date filter (from issue metabase#12228)", () => {
-    withSampleDataset(({ ORDERS }) => {
-      cy.request("POST", "/api/card", {
-        name: "Test Question",
-        dataset_query: {
-          type: "native",
-          native: {
-            query: "select count(*) from orders where {{created_at}}",
-            "template-tags": {
-              created_at: {
-                id: "6b8b10ef-0104-1047-1e1b-2492d5954322",
-                name: "created_at",
-                "display-name": "Created at",
-                type: "dimension",
-                dimension: ["field-id", ORDERS.CREATED_AT],
-                "widget-type": "date/month-year",
-              },
+    cy.request("POST", "/api/card", {
+      name: "Test Question",
+      dataset_query: {
+        type: "native",
+        native: {
+          query: "select count(*) from orders where {{created_at}}",
+          "template-tags": {
+            created_at: {
+              id: "6b8b10ef-0104-1047-1e1b-2492d5954322",
+              name: "created_at",
+              "display-name": "Created at",
+              type: "dimension",
+              dimension: ["field-id", ORDERS.CREATED_AT],
+              "widget-type": "date/month-year",
             },
           },
-          database: 1,
         },
-        display: "scalar",
-        description: null,
-        visualization_settings: {},
-        collection_id: null,
-        result_metadata: null,
-        metadata_checksum: null,
-      }).then(response => {
-        cy.visit(`/question/${response.body.id}?created_at=2020-01`);
-        cy.contains("580");
-      });
+        database: 1,
+      },
+      display: "scalar",
+      description: null,
+      visualization_settings: {},
+      collection_id: null,
+      result_metadata: null,
+      metadata_checksum: null,
+    }).then(response => {
+      cy.visit(`/question/${response.body.id}?created_at=2020-01`);
+      cy.contains("580");
     });
   });
 
@@ -207,5 +208,73 @@ describe("scenarios > question > native", () => {
 
     // confirm that the question saved and url updated
     cy.location("pathname").should("match", /\/question\/\d+/);
+  });
+
+  it(`shouldn't remove rows containing NULL when using "Is not" or "Does not contain" filter (metabase#13332)`, () => {
+    const FILTERS = ["Is not", "Does not contain"];
+    const QUESTION = "QQ";
+
+    cy.visit("/question/new");
+    cy.contains("Native query").click();
+    cy.get(".ace_content")
+      .should("be.visible")
+      .type(
+        `SELECT null AS "V", 1 as "N" UNION ALL SELECT 'This has a value' AS "V", 2 as "N"`,
+      );
+    cy.findByText("Save").click();
+
+    modal().within(() => {
+      cy.findByLabelText("Name").type(QUESTION);
+      cy.findByText("Save").click();
+    });
+    cy.findByText("Not now").click();
+
+    cy.visit("/");
+    cy.findByText("Ask a question").click();
+    cy.findByText("Simple question").click();
+    popover().within(() => {
+      cy.findByText("Saved Questions").click();
+      cy.findByText("Robert Tableton's Personal Collection").click();
+      cy.findByText(QUESTION).click();
+    });
+
+    cy.url("should.contain", "/question#");
+    cy.findByText("This has a value");
+
+    FILTERS.forEach(filter => {
+      // Clicking on a question's name in UI resets previously applied filters
+      // We can ask variations of that question "on the fly"
+      cy.findByText(QUESTION).click();
+
+      cy.log("**Apply a filter**");
+      cy.findAllByText("Filter")
+        .first()
+        .click();
+      cy.get(".List-item-title")
+        .contains("V")
+        .click();
+      cy.findByText("Is").click();
+      popover().within(() => {
+        cy.findByText(filter).click();
+      });
+      cy.findByPlaceholderText("Enter some text").type("This has a value");
+      cy.findByText("Add filter").click();
+
+      cy.log(
+        `**Mid-point assertion for "${filter}" filter| FAILING in v0.36.6**`,
+      );
+      cy.findByText(`V ${filter.toLowerCase()} This has a value`);
+      cy.findByText("No results!").should("not.exist");
+
+      cy.log(
+        "**Final assertion: Count of rows with 'null' value should be 1**",
+      );
+      // "Count" is pre-selected option for "Summarize"
+      cy.findAllByText("Summarize")
+        .first()
+        .click();
+      cy.findByText("Done").click();
+      cy.get(".ScalarValue").contains("1");
+    });
   });
 });

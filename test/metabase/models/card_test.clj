@@ -1,12 +1,12 @@
 (ns metabase.models.card-test
   (:require [cheshire.core :as json]
             [clojure.test :refer :all]
-            [metabase
-             [models :refer [Card Collection Dashboard DashboardCard]]
-             [test :as mt]
-             [util :as u]]
+            [metabase.models :refer [Card Collection Dashboard DashboardCard]]
             [metabase.models.card :as card]
+            [metabase.query-processor :as qp]
+            [metabase.test :as mt]
             [metabase.test.util :as tu]
+            [metabase.util :as u]
             [toucan.db :as db]
             [toucan.util.test :as tt]))
 
@@ -173,3 +173,40 @@
              clojure.lang.ExceptionInfo
              #"A Card can only go in Collections in the \"default\" namespace"
              (db/update! Card card-id {:collection_id collection-id})))))))
+
+(deftest normalize-result-metadata-test
+  (testing "Should normalize result metadata keys when fetching a Card from the DB"
+    (let [metadata (qp/query->expected-cols (mt/mbql-query :venues))]
+      (mt/with-temp Card [{card-id :id} {:dataset_query   (mt/mbql-query :venues)
+                                         :result_metadata metadata}]
+        (is (= (mt/derecordize metadata)
+               (mt/derecordize (db/select-one-field :result_metadata Card :id card-id))))))))
+
+(deftest populate-result-metadata-if-needed-test
+  (doseq [[creating-or-updating f]
+          {"creating" (fn [properties f]
+                        (mt/with-temp Card [{card-id :id} properties]
+                          (f (db/select-one-field :result_metadata Card :id card-id))))
+           "updating" (fn [changes f]
+                        (mt/with-temp Card [{card-id :id} {:dataset_query   (mt/mbql-query :checkins)
+                                                           :result_metadata (qp/query->expected-cols (mt/mbql-query :checkins))}]
+                          (db/update! Card card-id changes)
+                          (f (db/select-one-field :result_metadata Card :id card-id))))}]
+    (testing (format "When %s a Card\n" creating-or-updating)
+      (testing "If result_metadata is empty, we should attempt to populate it"
+        (f {:dataset_query (mt/mbql-query :venues)}
+           (fn [metadata]
+             (is (= (map :name (qp/query->expected-cols (mt/mbql-query :venues)))
+                    (map :name metadata))))))
+      (testing "Don't overwrite result_metadata that was passed in"
+        (let [metadata (take 1 (qp/query->expected-cols (mt/mbql-query :venues)))]
+          (f {:dataset_query   (mt/mbql-query :venues)
+              :result_metadata metadata}
+             (fn [new-metadata]
+               (is (= (mt/derecordize metadata)
+                      (mt/derecordize new-metadata)))))))
+      (testing "Shouldn't barf if query can't be run (e.g. if query is a SQL query); set metadata to nil"
+        (f {:dataset_query (mt/native-query {:native "SELECT * FROM VENUES"})}
+           (fn [metadata]
+             (is (= nil
+                    metadata))))))))

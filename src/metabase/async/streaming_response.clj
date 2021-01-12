@@ -10,9 +10,8 @@
             [metabase.util.i18n :refer [trs]]
             [potemkin.types :as p.types]
             [pretty.core :as pretty]
-            [ring.util
-             [response :as ring.response]
-             [servlet :as ring.servlet]])
+            [ring.util.response :as ring.response]
+            [ring.util.servlet :as ring.servlet])
   (:import [java.io BufferedWriter OutputStream OutputStreamWriter]
            java.nio.ByteBuffer
            [java.nio.channels ClosedChannelException SocketChannel]
@@ -179,12 +178,12 @@
 
 (defn- respond
   [{:keys [^HttpServletResponse response ^AsyncContext async-context request-map response-map request]}
-   f {:keys [content-type], :as options} finished-chan]
+   f {:keys [content-type status headers], :as options} finished-chan]
   (let [canceled-chan (a/promise-chan)]
     (try
-      (.setStatus response 202)
+      (.setStatus response (or status 202))
       (let [gzip?   (should-gzip-response? request-map)
-            headers (cond-> (assoc (:headers response-map) "Content-Type" content-type)
+            headers (cond-> (assoc (merge headers (:headers response-map)) "Content-Type" content-type)
                       gzip? (assoc "Content-Encoding" "gzip"))]
         (#'ring.servlet/set-headers response headers)
         (let [output-stream-delay (output-stream-delay gzip? response)

@@ -1,40 +1,24 @@
 (ns metabase.util-test
   "Tests for functions in `metabase.util`."
   (:require [clojure.test :refer :all]
-            [clojure.tools.macro :as tools.macro]
             [flatland.ordered.map :refer [ordered-map]]
-            [metabase
-             [test :as mt]
-             [util :as u]]))
+            [metabase.test :as mt]
+            [metabase.util :as u]))
 
-(defn- are+-message [expr arglist args]
-  (pr-str
-   (second
-    (macroexpand-1
-     (list
-      `tools.macro/symbol-macrolet
-      (vec (apply concat (map-indexed (fn [i arg]
-                                        [arg (nth args i)])
-                                      arglist)))
-      expr)))))
-
-(defmacro ^:private are+
-  "Like `clojure.test/are` but includes a message for easier test failure debugging. (Also this is somewhat more
-  efficient since it generates far less code ­ it uses `doseq` rather than repeating the entire test each time.)
-
-  TODO ­ if this macro proves useful, we should consider moving it to somewhere more general, such as
-  `metabase.test`."
-  {:style/indent 2}
-  [argv expr & args]
-  `(doseq [args# ~(mapv vec (partition (count argv) args))
-           :let [~argv args#]]
-     (is ~expr
-         (are+-message '~expr '~argv args#))))
+(deftest decolorize-test
+  (is (= "[31mmessage[0m"
+         (u/colorize 'red "message")))
+  (is (= "message"
+         (u/decolorize "[31mmessage[0m")))
+  (is (= "message"
+         (u/decolorize (u/colorize 'red "message"))))
+  (is (= nil
+         (u/decolorize nil))))
 
 (deftest host-up?-test
   (testing "host-up?"
-    (are+ [s expected] (= expected
-                          (u/host-up? s))
+    (mt/are+ [s expected] (= expected
+                             (u/host-up? s))
       "localhost"  true
       "nosuchhost" false))
   (testing "host-port-up?"
@@ -42,7 +26,7 @@
            (u/host-port-up? "nosuchhost" 8005)))))
 
 (deftest url?-test
-  (are+ [s expected] (= expected
+  (mt/are+ [s expected] (= expected
                         (u/url? s))
     "http://google.com"                                                                      true
     "https://google.com"                                                                     true
@@ -69,8 +53,21 @@
     ;; nil .getAuthority needs to be handled or NullPointerException
     "http:/"                                                                                 false))
 
+(deftest state?-test
+  (mt/are+ [s expected] (= expected
+                        (u/state? s))
+    "louisiana"      true
+    "north carolina" true
+    "WASHINGTON"     true
+    "CA"             true
+    "NY"             true
+    "random"         false
+    nil              false
+    3                false
+    (Object.)        false))
+
 (deftest qualified-name-test
-  (are+ [k expected] (= expected
+  (mt/are+ [k expected] (= expected
                         (u/qualified-name k))
     :keyword                          "keyword"
     :namespace/keyword                "namespace/keyword"
@@ -128,7 +125,7 @@
                  (u/slugify s))))))))
 
 (deftest select-nested-keys-test
-  (are+ [m keyseq expected] (= expected
+  (mt/are+ [m keyseq expected] (= expected
                                (u/select-nested-keys m keyseq))
     {:a 100, :b {:c 200, :d 300}}              [:a [:b :d] :c]   {:a 100, :b {:d 300}}
     {:a 100, :b {:c 200, :d 300}}              [:b]              {:b {:c 200, :d 300}}
@@ -144,13 +141,21 @@
     {}                                         [:c]              {}))
 
 (deftest base64-string?-test
-  (are+ [s expected] (= expected
+  (mt/are+ [s expected]    (= expected
                         (u/base64-string? s))
-    "ABc"           true
-    "ABc/+asdasd==" true
-    100             false
-    "<<>>"          false
-    "{\"a\": 10}"   false))
+    "ABc="         true
+    "ABc/+asdasd=" true
+    100            false
+    "<<>>"         false
+    "{\"a\": 10}"  false
+    ;; must be at least 2 characters...
+    "/"            false
+    ;; and end with padding if needed
+    "QQ"           false
+    "QQ="          false
+    "QQ=="         true
+    ;; padding has to go at the end
+    "==QQ"         false))
 
 (deftest select-keys-test
   (testing "select-non-nil-keys"
@@ -163,7 +168,7 @@
              :non-nil #{:d :e :f})))))
 
 (deftest order-of-magnitude-test
-  (are+ [n expected] (= expected
+  (mt/are+ [n expected] (= expected
                         (u/order-of-magnitude n))
     0.01  -2
     0.5   -1
@@ -187,7 +192,7 @@
          (u/snake-keys {:num-cans 2, :lisp-case? {:nested-maps? true}}))))
 
 (deftest one-or-many-test
-  (are+ [input expected] (= expected
+  (mt/are+ [input expected] (= expected
                             (u/one-or-many input))
     nil   nil
     [nil] [nil]
@@ -195,7 +200,7 @@
     [42]  [42]))
 
 (deftest topological-sort-test
-  (are+ [input expected] (= expected
+  (mt/are+ [input expected] (= expected
                             (u/topological-sort identity input))
     {:b []
      :c [:a]
@@ -218,7 +223,7 @@
            (u/upper-case-en "id")))))
 
 (deftest parse-currency-test
-  (are+ [s expected] (= expected
+  (mt/are+ [s expected] (= expected
                         (u/parse-currency s))
     nil             nil
     ""              nil
@@ -238,6 +243,21 @@
     "$.05"          0.05M
     "0.05"          0.05M))
 
+(deftest or-with-test
+  (testing "empty case"
+    (is (= (or) (u/or-with identity))))
+  (testing "short-circuiting"
+    (let [counter (atom [])
+          expensive-fn (fn [x] (swap! counter conj x) x)
+          result (u/or-with even?
+                            (expensive-fn 1)
+                            (expensive-fn 2)
+                            (expensive-fn 3))]
+      (is (= [result @counter]
+             [2 [1 2]]))))
+  (testing "failure"
+    (is (nil? (u/or-with even? 1 3 5)))))
+
 ;; Local Variables:
-;; eval: (add-to-list (make-local-variable 'clojure-align-cond-forms) "are+")
+;; eval: (add-to-list (make-local-variable 'clojure-align-cond-forms) "mt/are+")
 ;; End:

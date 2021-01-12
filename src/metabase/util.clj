@@ -1,15 +1,14 @@
 (ns metabase.util
   "Common utility functions useful throughout the codebase."
-  (:require [clojure
-             [data :as data]
-             [pprint :refer [pprint]]
-             [set :as set]
-             [string :as str]
-             [walk :as walk]]
+  (:require [clojure.data :as data]
             [clojure.java.classpath :as classpath]
             [clojure.math.numeric-tower :as math]
+            [clojure.pprint :refer [pprint]]
+            [clojure.set :as set]
+            [clojure.string :as str]
             [clojure.tools.logging :as log]
             [clojure.tools.namespace.find :as ns-find]
+            [clojure.walk :as walk]
             [colorize.core :as colorize]
             [flatland.ordered.map :refer [ordered-map]]
             [medley.core :as m]
@@ -23,14 +22,6 @@
            java.util.Locale
            javax.xml.bind.DatatypeConverter
            [org.apache.commons.validator.routines RegexValidator UrlValidator]))
-
-;; This is the very first log message that will get printed.
-;;
-;; It's here because this is one of the very first namespaces that gets loaded, and the first that has access to the
-;; logger It shows up a solid 10-15 seconds before the "Starting Metabase in STANDALONE mode" message because so many
-;; other namespaces need to get loaded
-(when-not *compile-files*
-  (log/info (trs "Loading Metabase...")))
 
 (defn format-bytes
   "Nicely format `num-bytes` as kilobytes/megabytes/etc.
@@ -93,6 +84,23 @@
   (boolean (when (string? s)
              (re-matches #"[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
                          (str/lower-case s)))))
+
+(defn state?
+  "Is `s` a state string?"
+  ^Boolean [^String s]
+  (boolean
+    (when (string? s)
+      (contains? #{"alabama" "alaska" "arizona" "arkansas" "california" "colorado" "connecticut" "delaware"
+                   "florida" "georgia" "hawaii" "idaho" "illinois" "indiana" "iowa" "kansas" "kentucky" "louisiana"
+                   "maine" "maryland" "massachusetts" "michigan" "minnesota" "mississippi" "missouri" "montana"
+                   "nebraska" "nevada" "new hampshire" "new jersey" "new mexico" "new york" "north carolina"
+                   "north dakota" "ohio" "oklahoma" "oregon" "pennsylvania" "rhode island" "south carolina"
+                   "south dakota" "tennessee" "texas" "utah" "vermont" "virginia" "washington" "west virginia"
+                   "wisconsin" "wyoming"
+                   "ak" "al" "ar" "az" "ca" "co" "ct" "de" "fl" "ga" "hi" "ia" "id" "il" "in" "ks" "ky" "la"
+                   "ma" "md" "me" "mi" "mn" "mo" "ms" "mt" "nc" "nd" "ne" "nh" "nj" "nm" "nv" "ny" "oh" "ok"
+                   "or" "pa" "ri" "sc" "sd" "tn" "tx" "ut" "va" "vt" "wa" "wi" "wv" "wy"}
+                 (str/lower-case s)))))
 
 (defn url?
   "Is `s` a valid HTTP/HTTPS URL string?"
@@ -195,7 +203,7 @@
    and [Common Lisp](http://www.lispworks.com/documentation/HyperSpec/Body/m_prog1c.htm#prog1).
 
   Style note: Prefer `doto` when appropriate, e.g. when dealing with Java objects."
-  {:style/indent 1}
+  {:style/indent :defn}
   [first-form & body]
   `(let [~'<> ~first-form]
      ~@body
@@ -222,6 +230,11 @@
       (colorize/color (keyword color) (str x)))
     (fn [_ x]
       (str x))))
+
+(defn decolorize
+  "Remove ANSI escape sequences from a String `s`."
+  ^String [s]
+  (some-> s (str/replace #"\[[;\d]*m" "")))
 
 (defn format-color
   "With one arg, converts something to a string and colorizes it. With two args, behaves like `format`, but colorizes
@@ -475,9 +488,7 @@
     (map? object-or-id)     (recur (:id object-or-id))
     (integer? object-or-id) object-or-id))
 
-;; TODO - now that I think about this, I think this should be called `the-id` instead, because the idea is similar to
-;; `clojure.core/the-ns`
-(defn get-id
+(defn the-id
   "If passed an integer ID, returns it. If passed a map containing an `:id` key, returns the value if it is an integer.
   Otherwise, throws an Exception.
 
@@ -487,6 +498,10 @@
   ^Integer [object-or-id]
   (or (id object-or-id)
       (throw (Exception. (tru "Not something with an ID: {0}" object-or-id)))))
+
+(def ^:deprecated ^Integer ^{:arglists '([object-or-id])} get-id
+  "DEPRECATED: Use `the-id` instead, which does the same thing, but has a clearer name."
+  the-id)
 
 ;; This is made `^:const` so it will get calculated when the uberjar is compiled. `find-namespaces` won't work if
 ;; source is excluded; either way this takes a few seconds, so doing it at compile time speeds up launch as well.
@@ -538,7 +553,7 @@
   "Is `s` a Base-64 encoded string?"
   ^Boolean [s]
   (boolean (when (string? s)
-             (re-find #"^[0-9A-Za-z/+]+=*$" s))))
+             (re-matches #"^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$" s))))
 
 (defn decode-base64
   "Decodes a Base64 string to a UTF-8 string"
@@ -837,3 +852,14 @@
        [#","                  "."]
        ;; move minus sign at end to front
        [#"(^[^-]+)-$"         "-$1"]]))))
+
+(defmacro or-with
+  "Like or, but determines truthiness with `pred`."
+  ([pred]
+   nil)
+  ([pred x & more]
+   `(let [pred# ~pred
+          x#    ~x]
+      (if (pred# x#)
+        x#
+        (or-with pred# ~@more)))))

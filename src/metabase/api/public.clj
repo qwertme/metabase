@@ -4,40 +4,33 @@
             [clojure.core.async :as a]
             [compojure.core :refer [GET]]
             [medley.core :as m]
-            [metabase
-             [db :as mdb]
-             [query-processor :as qp]
-             [util :as u]]
-            [metabase.api
-             [card :as card-api]
-             [common :as api]
-             [dashboard :as dashboard-api]
-             [dataset :as dataset-api]
-             [field :as field-api]]
+            [metabase.api.card :as card-api]
+            [metabase.api.common :as api]
+            [metabase.api.dashboard :as dashboard-api]
+            [metabase.api.dataset :as dataset-api]
+            [metabase.api.field :as field-api]
             [metabase.async.util :as async.u]
-            [metabase.mbql
-             [normalize :as normalize]
-             [util :as mbql.u]]
-            [metabase.models
-             [card :as card :refer [Card]]
-             [dashboard :refer [Dashboard]]
-             [dashboard-card :refer [DashboardCard]]
-             [dashboard-card-series :refer [DashboardCardSeries]]
-             [dimension :refer [Dimension]]
-             [field :refer [Field]]
-             [params :as params]]
-            [metabase.query-processor
-             [error-type :as qp.error-type]
-             [streaming :as qp.streaming]]
+            [metabase.db.util :as mdb.u]
+            [metabase.mbql.normalize :as normalize]
+            [metabase.mbql.util :as mbql.u]
+            [metabase.models.card :as card :refer [Card]]
+            [metabase.models.dashboard :refer [Dashboard]]
+            [metabase.models.dashboard-card :refer [DashboardCard]]
+            [metabase.models.dashboard-card-series :refer [DashboardCardSeries]]
+            [metabase.models.dimension :refer [Dimension]]
+            [metabase.models.field :refer [Field]]
+            [metabase.models.params :as params]
+            [metabase.query-processor :as qp]
+            [metabase.query-processor.error-type :as qp.error-type]
             [metabase.query-processor.middleware.constraints :as constraints]
-            [metabase.util
-             [embed :as embed]
-             [i18n :refer [tru]]
-             [schema :as su]]
+            [metabase.query-processor.streaming :as qp.streaming]
+            [metabase.util :as u]
+            [metabase.util.embed :as embed]
+            [metabase.util.i18n :refer [tru]]
+            [metabase.util.schema :as su]
             [schema.core :as s]
-            [toucan
-             [db :as db]
-             [hydrate :refer [hydrate]]]))
+            [toucan.db :as db]
+            [toucan.hydrate :refer [hydrate]]))
 
 (def ^:private ^:const ^Integer default-embed-max-height 800)
 (def ^:private ^:const ^Integer default-embed-max-width 1024)
@@ -70,7 +63,8 @@
   (api/check-public-sharing-enabled)
   (card-with-uuid uuid))
 
-(defmulti ^:private transform-results
+(defmulti transform-results
+  "Transform results to be suitable for a public endpoint"
   {:arglists '([results])}
   :status)
 
@@ -95,7 +89,9 @@
    (when-not (qp.error-type/show-in-embeds? error-type)
      {:error (tru "An error occurred while running the query.")})))
 
-(defn- public-reducedf [orig-reducedf]
+(defn public-reducedf
+  "Reducer function for public data"
+  [orig-reducedf]
   (fn [metadata final-metadata context]
     (orig-reducedf metadata (transform-results final-metadata) context)))
 
@@ -352,8 +348,8 @@
        (db/exists? Dimension :field_id field-id, :human_readable_field_id search-field-id)
        ;; just do a couple small queries to figure this out, we could write a fancy query to join Field against itself
        ;; and do this in one but the extra code complexity isn't worth it IMO
-       (when-let [table-id (db/select-one-field :table_id Field :id field-id, :special_type (mdb/isa :type/PK))]
-         (db/exists? Field :id search-field-id, :table_id table-id, :special_type (mdb/isa :type/Name))))))
+       (when-let [table-id (db/select-one-field :table_id Field :id field-id, :special_type (mdb.u/isa :type/PK))]
+         (db/exists? Field :id search-field-id, :table_id table-id, :special_type (mdb.u/isa :type/Name))))))
 
 
 (defn- check-field-is-referenced-by-dashboard
@@ -467,6 +463,22 @@
   (api/check-public-sharing-enabled)
   (let [dashboard-id (db/select-one-id Dashboard :public_uuid uuid, :archived false)]
     (dashboard-field-remapped-values dashboard-id field-id remapped-id value)))
+
+;;; ------------------------------------------------ Chain Filtering -------------------------------------------------
+
+(api/defendpoint GET "/dashboard/:uuid/params/:param-key/values"
+  "Fetch filter values for dashboard parameter `param-key`."
+  [uuid param-key :as {:keys [query-params]}]
+  (let [dashboard (dashboard-with-uuid uuid)]
+    (binding [api/*current-user-permissions-set* (atom #{"/"})]
+      (dashboard-api/chain-filter dashboard param-key query-params))))
+
+(api/defendpoint GET "/dashboard/:uuid/params/:param-key/search/:prefix"
+  "Fetch filter values for dashboard parameter `param-key`, with specified `prefix`."
+  [uuid param-key prefix :as {:keys [query-params]}]
+  (let [dashboard (dashboard-with-uuid uuid)]
+    (binding [api/*current-user-permissions-set* (atom #{"/"})]
+      (dashboard-api/chain-filter dashboard param-key query-params prefix))))
 
 
 ;;; ----------------------------------------- Route Definitions & Complaints -----------------------------------------

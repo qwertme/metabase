@@ -1,9 +1,8 @@
 (ns metabase.pulse.render.table-test
   (:require [expectations :refer [expect]]
-            [metabase.pulse.render
-             [color :as color]
-             [table :as table]
-             [test-util :as render.tu]]
+            [metabase.pulse.render.color :as color]
+            [metabase.pulse.render.table :as table]
+            [metabase.pulse.render.test-util :as render.tu]
             [metabase.test.util :as tu]))
 
 (defn- query-results->header+rows
@@ -64,6 +63,6 @@
                               [4 5 6]
                               [7 8 9]]}]
     (-> (color/make-color-selector query-results (:visualization_settings render.tu/test-card))
-        (#'table/render-table ["a" "b" "c"] (query-results->header+rows query-results))
+        (#'table/render-table 0 ["a" "b" "c"] (query-results->header+rows query-results))
         find-table-body
         cell-value->background-color)))

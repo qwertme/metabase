@@ -2,9 +2,8 @@
   "Query processor tests for DBs that are event-based, like Druid.
   There architecture is different enough that we can't test them along with our 'normal' DBs in `query-procesor-test`."
   (:require [clojure.test :refer :all]
-            [metabase
-             [query-processor-test :as qp.test]
-             [test :as mt]]
+            [metabase.query-processor-test :as qp.test]
+            [metabase.test :as mt]
             [metabase.timeseries-query-processor-test.util :as tqp.test]))
 
 (deftest limit-test
@@ -538,11 +537,11 @@
                                  [5 1]
                                  [6 1]
                                  [7 2]]
-               :week-of-year    [[1 10]
+               :week-of-year    [[1  8]
                                  [2  7]
                                  [3  8]
-                                 [4 10]
-                                 [5  4]]
+                                 [4  8]
+                                 [5 14]]
                :month           [["2013-01-01"  8]
                                  ["2013-02-01" 11]
                                  ["2013-03-01" 21]

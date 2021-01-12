@@ -1,9 +1,6 @@
-import {
-  signInAsAdmin,
-  signIn,
-  withSampleDataset,
-  restore,
-} from "__support__/cypress";
+import _ from "underscore";
+import { assoc } from "icepick";
+import { signInAsAdmin, signIn, restore } from "__support__/cypress";
 
 describe("scenarios > dashboard > permissions", () => {
   before(restore);
@@ -16,36 +13,53 @@ describe("scenarios > dashboard > permissions", () => {
 
     // The setup is a bunch of nested API calls to create the questions, dashboard, dashcards, collections and link them all up together.
     let firstQuestionId, secondQuestionId;
-    withSampleDataset(({ ORDERS_ID }) => {
-      cy.request("POST", "/api/collection", {
-        name: "locked down collection",
-        color: "#509EE3",
-        parent_id: null,
-      }).then(({ body: { id: collection_id } }) => {
-        // TODO - This will break if the default snapshot updates collections or groups.
-        // We should first request the current graph and then modify it.
-        cy.request("PUT", "/api/collection/graph", {
-          revision: 1,
-          groups: {
-            "1": { "6": "none", root: "none" },
-            "2": { "6": "write", root: "write" },
-            "3": { "6": "write", root: "write" },
-            "4": { "6": "none", root: "write" },
-            "5": { "6": "none", root: "none" },
-          },
-        });
-        cy.request("POST", "/api/card", {
-          dataset_query: {
-            database: 1,
-            type: "native",
-            native: { query: "select 'foo'" },
-          },
-          display: "table",
-          visualization_settings: {},
-          name: "First Question",
-          collection_id,
-        }).then(({ body: { id } }) => (firstQuestionId = id));
-      });
+
+    cy.request("POST", "/api/collection", {
+      name: "locked down collection",
+      color: "#509EE3",
+      parent_id: null,
+    }).then(({ body: { id: collection_id } }) => {
+      cy.request("GET", "/api/collection/graph").then(
+        ({ body: { revision, groups } }) => {
+          // update the perms for the just-created collection
+          cy.request("PUT", "/api/collection/graph", {
+            revision,
+            groups: _.mapObject(groups, (groupPerms, groupId) =>
+              assoc(
+                groupPerms,
+                collection_id,
+                // 2 is admins, so leave that as "write"
+                groupId === "2" ? "write" : "none",
+              ),
+            ),
+          });
+        },
+      );
+
+      cy.request("POST", "/api/card", {
+        dataset_query: {
+          database: 1,
+          type: "native",
+          native: { query: "select 'foo'" },
+        },
+        display: "table",
+        visualization_settings: {},
+        name: "First Question",
+        collection_id,
+      }).then(({ body: { id } }) => (firstQuestionId = id));
+
+      cy.request("POST", "/api/card", {
+        dataset_query: {
+          database: 1,
+          type: "native",
+          native: { query: "select 'foo'" },
+        },
+        display: "table",
+        visualization_settings: {},
+        name: "First Question",
+        collection_id,
+      }).then(({ body: { id } }) => (firstQuestionId = id));
+
       cy.request("POST", "/api/card", {
         dataset_query: {
           database: 1,

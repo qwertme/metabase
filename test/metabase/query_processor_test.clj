@@ -2,20 +2,17 @@
   "Helper functions for various query processor tests. The tests themselves can be found in various
   `metabase.query-processor-test.*` namespaces; there are so many that it is no longer feasible to keep them all in
   this one. Event-based DBs such as Druid are tested in `metabase.driver.event-query-processor-test`."
-  (:require [clojure
-             [set :as set]
-             [string :as str]]
+  (:require [clojure.set :as set]
+            [clojure.string :as str]
             [medley.core :as m]
-            [metabase
-             [driver :as driver]
-             [query-processor :as qp]
-             [util :as u]]
+            [metabase.driver :as driver]
             [metabase.driver.util :as driver.u]
             [metabase.models.field :refer [Field]]
+            [metabase.query-processor :as qp]
             [metabase.test.data :as data]
-            [metabase.test.data
-             [env :as tx.env]
-             [interface :as tx]]
+            [metabase.test.data.env :as tx.env]
+            [metabase.test.data.interface :as tx]
+            [metabase.util :as u]
             [toucan.db :as db]))
 
 ;;; ---------------------------------------------- Helper Fns + Macros -----------------------------------------------
@@ -141,6 +138,23 @@
 
   ([table-kw field-kw]
    (field-literal-col (col table-kw field-kw))))
+
+(defn field-literal-col-keep-extra-cols
+  "Return expected `:cols` info for a Field that was referred to as a `:field-literal`. This differs from
+  `field-literal-col` in that it doesn't remove columns like `:description` -- in some cases metadata will come back
+  with these cols, and in some it won't -- I think it has to do with whether the Card had `:source_metadata` saved for
+  it.
+
+    (field-literal-col-keep-extra-cols :venues :price)
+    (field-literal-col-keep-extra-cols (aggregate-col :count))"
+  {:arglists '([col] [table-kw field-kw])}
+  ([{field-name :name, base-type :base_type, unit :unit, :as col}]
+   (assoc col
+          :field_ref [:field-literal field-name base-type]
+          :source    :fields))
+
+  ([table-kw field-kw]
+   (field-literal-col-keep-extra-cols (col table-kw field-kw))))
 
 (defn fk-col
   "Return expected `:cols` info for a Field that came in via an implicit join (i.e, via an `fk->` clause)."

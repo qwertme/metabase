@@ -2,12 +2,10 @@
   (:require [clojure.tools.logging :as log]
             [clojure.walk :as walk]
             [metabase.api.common :as api]
-            [metabase.mbql
-             [schema :as mbql.s]
-             [util :as mbql.u]]
-            [metabase.query-processor
-             [interface :as qp.i]
-             [store :as qp.store]]
+            [metabase.mbql.schema :as mbql.s]
+            [metabase.mbql.util :as mbql.u]
+            [metabase.query-processor.interface :as qp.i]
+            [metabase.query-processor.store :as qp.store]
             [metabase.util.i18n :refer [trs]]
             [schema.core :as s]))
 
@@ -44,9 +42,9 @@
          {:source-query source-query}))
       nil)))
 
-(s/defn ^:private mbql-source-query->metadata :- [mbql.s/SourceQueryMetadata]
+(s/defn mbql-source-query->metadata :- [mbql.s/SourceQueryMetadata]
   "Preprocess a `source-query` so we can determine the result columns."
-  [source-query]
+  [source-query :- mbql.s/MBQLQuery]
   (try
     (let [cols (binding [api/*current-user-id* nil]
                  ((resolve 'metabase.query-processor/query->expected-cols) {:database (:id (qp.store/database))

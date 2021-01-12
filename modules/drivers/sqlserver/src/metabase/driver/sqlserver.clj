@@ -2,17 +2,14 @@
   "Driver for SQLServer databases. Uses the official Microsoft JDBC driver under the hood (pre-0.25.0, used jTDS)."
   (:require [honeysql.core :as hsql]
             [java-time :as t]
-            [metabase
-             [config :as config]
-             [driver :as driver]]
-            [metabase.driver
-             [common :as driver.common]
-             [sql :as sql]]
-            [metabase.driver.sql-jdbc
-             [common :as sql-jdbc.common]
-             [connection :as sql-jdbc.conn]
-             [execute :as sql-jdbc.execute]
-             [sync :as sql-jdbc.sync]]
+            [metabase.config :as config]
+            [metabase.driver :as driver]
+            [metabase.driver.common :as driver.common]
+            [metabase.driver.sql :as sql]
+            [metabase.driver.sql-jdbc.common :as sql-jdbc.common]
+            [metabase.driver.sql-jdbc.connection :as sql-jdbc.conn]
+            [metabase.driver.sql-jdbc.execute :as sql-jdbc.execute]
+            [metabase.driver.sql-jdbc.sync :as sql-jdbc.sync]
             [metabase.driver.sql.query-processor :as sql.qp]
             [metabase.driver.sql.util.unprepare :as unprepare]
             [metabase.query-processor.interface :as qp.i]
@@ -29,6 +26,10 @@
 ;; themselves. Since this isn't something we can really change in the query itself don't present the option to the
 ;; users in the UI
 (defmethod driver/supports? [:sqlserver :case-sensitivity-string-filter-options] [_ _] false)
+
+(defmethod driver/db-start-of-week :sqlserver
+  [_]
+  :sunday)
 
 ;; See the list here: https://docs.microsoft.com/en-us/sql/connect/jdbc/using-basic-data-types
 (defmethod sql-jdbc.sync/database-type->base-type :sqlserver
@@ -137,7 +138,7 @@
 
 (defmethod sql.qp/date [:sqlserver :day-of-week]
   [_ _ expr]
-  (date-part :weekday expr))
+  (sql.qp/adjust-day-of-week :sqlserver (date-part :weekday expr)))
 
 (defmethod sql.qp/date [:sqlserver :day-of-month]
   [_ _ expr]
@@ -154,12 +155,8 @@
   [_ _ expr]
   (hx/->datetime
    (date-add :day
-             (hx/- 1 (date-part :weekday expr))
+             (hx/- 1 (date-part :weekday expr) (driver.common/start-of-week-offset :sqlserver))
              (hx/->date expr))))
-
-(defmethod sql.qp/date [:sqlserver :week-of-year]
-  [_ _ expr]
-  (date-part :iso_week expr))
 
 (defmethod sql.qp/date [:sqlserver :month]
   [_ _ expr]
@@ -196,6 +193,10 @@
   ;; integer overflow errors (especially for millisecond timestamps).
   ;; Work around this by converting the timestamps to minutes instead before calling DATEADD().
   (date-add :minute (hx// expr 60) (hx/literal "1970-01-01")))
+
+(defmethod sql.qp/cast-temporal-string [:sqlserver :type/ISO8601DateTimeString]
+  [_driver _special_type expr]
+  (hx/->datetime expr))
 
 (defmethod sql.qp/apply-top-level-clause [:sqlserver :limit]
   [_ _ honeysql-form {value :limit}]

@@ -1,4 +1,7 @@
 import { restore, signInAsAdmin, popover, modal } from "__support__/cypress";
+import { SAMPLE_DATASET } from "__support__/cypress_sample_dataset";
+
+const { ORDERS_ID } = SAMPLE_DATASET;
 
 describe("scenarios > admin > datamodel > metrics", () => {
   before(restore);
@@ -13,6 +16,21 @@ describe("scenarios > admin > datamodel > metrics", () => {
       cy.findByText(
         "Create metrics to add them to the Summarize dropdown in the query builder",
       );
+    });
+
+    it.skip("should have 'Custom expression' in a filter list (metabase#13069)", () => {
+      cy.visit("/admin/datamodel/metrics");
+      cy.findByText("New metric").click();
+      cy.findByText("Select a table").click();
+      popover().within(() => {
+        cy.findByText("Orders").click();
+      });
+      cy.findByText("Add filters to narrow your answer").click();
+
+      cy.log("**Fails in v0.36.0 and v0.36.3. It exists in v0.35.4**");
+      popover().within(() => {
+        cy.findByText("Custom Expression");
+      });
     });
 
     it("should show how to create metrics", () => {
@@ -140,12 +158,10 @@ describe("scenarios > admin > datamodel > metrics", () => {
       cy.contains("Result: 18703");
 
       // update name and description, set a revision note, and save the update
-      cy.get('[name="name"]')
-        .clear()
-        .type("orders >10");
-      cy.get('[name="description"]')
-        .clear()
-        .type("Count of orders with a total over $10.");
+      cy.get('[name="name"]').type("{selectall}orders >10");
+      cy.get('[name="description"]').type(
+        "{selectall}Count of orders with a total over $10.",
+      );
       cy.get('[name="revision_message"]').type("time for a change");
       cy.contains("Save changes").click();
 
@@ -166,6 +182,37 @@ describe("scenarios > admin > datamodel > metrics", () => {
       modal()
         .contains("button", "Retire")
         .click();
+    });
+  });
+
+  describe("custom metrics", () => {
+    it("should save the metric using custom expressions (metabase#13022)", () => {
+      cy.request("POST", "/api/metric", {
+        name: "13022_Metric",
+        desription: "desc",
+        table_id: ORDERS_ID,
+        definition: {
+          "source-table": ORDERS_ID,
+          aggregation: [
+            [
+              "aggregation-options",
+              ["sum", ["*", ["field-id", 9], ["field-id", 10]]],
+              { "display-name": "CE" },
+            ],
+          ],
+        },
+      });
+
+      cy.log(
+        "**Navigate to the metrics page and assert the metric was indeed saved**",
+      );
+      cy.visit("/admin/datamodel/metrics");
+      cy.findByText(
+        'Unexpected input given to normalize. Expected type to be "object", found "string".',
+      ).should("not.exist");
+
+      cy.findByText("13022_Metric"); // Name
+      cy.findByText("Orders, CE"); // Definition
     });
   });
 });

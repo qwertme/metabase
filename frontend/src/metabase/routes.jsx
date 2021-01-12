@@ -29,12 +29,11 @@ import GoogleNoAccount from "metabase/auth/components/GoogleNoAccount";
 import DashboardApp from "metabase/dashboard/containers/DashboardApp";
 import AutomaticDashboardApp from "metabase/dashboard/containers/AutomaticDashboardApp";
 
-import {
-  BrowseApp,
-  DatabaseBrowser,
-  SchemaBrowser,
-  TableBrowser,
-} from "metabase/components/BrowseApp";
+/* Browse data */
+import BrowseApp from "metabase/browse/components/BrowseApp";
+import DatabaseBrowser from "metabase/browse/containers/DatabaseBrowser";
+import SchemaBrowser from "metabase/browse/containers/SchemaBrowser";
+import TableBrowser from "metabase/browse/containers/TableBrowser";
 
 import QueryBuilder from "metabase/query_builder/containers/QueryBuilder";
 
@@ -80,9 +79,11 @@ import getAdminRoutes from "metabase/admin/routes";
 
 import PublicQuestion from "metabase/public/containers/PublicQuestion";
 import PublicDashboard from "metabase/public/containers/PublicDashboard";
+import ArchiveDashboardModal from "metabase/dashboard/containers/ArchiveDashboardModal";
 import DashboardHistoryModal from "metabase/dashboard/components/DashboardHistoryModal";
 import DashboardMoveModal from "metabase/dashboard/components/DashboardMoveModal";
 import DashboardCopyModal from "metabase/dashboard/components/DashboardCopyModal";
+import DashboardDetailsModal from "metabase/dashboard/components/DashboardDetailsModal";
 import { ModalRoute } from "metabase/hoc/ModalRoute";
 
 import CollectionLanding from "metabase/components/CollectionLanding";
@@ -217,6 +218,8 @@ export const getRoutes = store => (
           <ModalRoute path="history" modal={DashboardHistoryModal} />
           <ModalRoute path="move" modal={DashboardMoveModal} />
           <ModalRoute path="copy" modal={DashboardCopyModal} />
+          <ModalRoute path="details" modal={DashboardDetailsModal} />
+          <ModalRoute path="archive" modal={ArchiveDashboardModal} />
         </Route>
 
         <Route path="/question">

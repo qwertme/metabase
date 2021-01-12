@@ -1,17 +1,14 @@
 (ns metabase.sample-dataset-test
   "Tests to make sure the Sample Dataset syncs the way we would expect."
   (:require [expectations :refer :all]
-            [metabase
-             [sample-data :as sample-data]
-             [sync :as sync]
-             [util :as u]]
-            [metabase.models
-             [database :refer [Database]]
-             [field :refer [Field]]
-             [table :refer [Table]]]
-            [toucan
-             [db :as db]
-             [hydrate :refer [hydrate]]]
+            [metabase.models.database :refer [Database]]
+            [metabase.models.field :refer [Field]]
+            [metabase.models.table :refer [Table]]
+            [metabase.sample-data :as sample-data]
+            [metabase.sync :as sync]
+            [metabase.util :as u]
+            [toucan.db :as db]
+            [toucan.hydrate :refer [hydrate]]
             [toucan.util.test :as tt]))
 
 ;;; ---------------------------------------------------- Tooling -----------------------------------------------------
@@ -62,6 +59,7 @@
                       :type   {:type/Text {:percent-json   0.0
                                            :percent-url    0.0
                                            :percent-email  0.0
+                                           :percent-state  0.0
                                            :average-length 13.532}}}
    :base_type        :type/Text}
   (with-temp-sample-dataset-db [db]

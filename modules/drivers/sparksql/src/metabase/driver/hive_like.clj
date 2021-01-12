@@ -3,19 +3,16 @@
             [honeysql.core :as hsql]
             [java-time :as t]
             [metabase.driver :as driver]
-            [metabase.driver.sql
-             [query-processor :as sql.qp]
-             [util :as sql.u]]
-            [metabase.driver.sql-jdbc
-             [connection :as sql-jdbc.conn]
-             [execute :as sql-jdbc.execute]
-             [sync :as sql-jdbc.sync]]
+            [metabase.driver.sql-jdbc.connection :as sql-jdbc.conn]
+            [metabase.driver.sql-jdbc.execute :as sql-jdbc.execute]
             [metabase.driver.sql-jdbc.execute.legacy-impl :as legacy]
+            [metabase.driver.sql-jdbc.sync :as sql-jdbc.sync]
+            [metabase.driver.sql.query-processor :as sql.qp]
+            [metabase.driver.sql.util :as sql.u]
             [metabase.driver.sql.util.unprepare :as unprepare]
             [metabase.models.table :refer [Table]]
-            [metabase.util
-             [date-2 :as u.date]
-             [honeysql-extensions :as hx]]
+            [metabase.util.date-2 :as u.date]
+            [metabase.util.honeysql-extensions :as hx]
             [toucan.db :as db])
   (:import [java.sql ResultSet Types]
            [java.time LocalDate OffsetDateTime ZonedDateTime]))
@@ -23,6 +20,10 @@
 (driver/register! :hive-like
   :parent #{:sql-jdbc ::legacy/use-legacy-classes-for-read-and-set}
   :abstract? true)
+
+(defmethod driver/db-start-of-week :hive-like
+  [_]
+  :sunday)
 
 (defmethod sql-jdbc.conn/data-warehouse-connection-pool-properties :hive-like
   [driver]
@@ -82,7 +83,6 @@
 (defmethod sql.qp/date [:hive-like :day]             [_ _ expr] (trunc-with-format "yyyy-MM-dd" (hx/->timestamp expr)))
 (defmethod sql.qp/date [:hive-like :day-of-month]    [_ _ expr] (hsql/call :dayofmonth (hx/->timestamp expr)))
 (defmethod sql.qp/date [:hive-like :day-of-year]     [_ _ expr] (hx/->integer (date-format "D" (hx/->timestamp expr))))
-(defmethod sql.qp/date [:hive-like :week-of-year]    [_ _ expr] (hsql/call :weekofyear (hx/->timestamp expr)))
 (defmethod sql.qp/date [:hive-like :month]           [_ _ expr] (hsql/call :trunc (hx/->timestamp expr) (hx/literal :MM)))
 (defmethod sql.qp/date [:hive-like :month-of-year]   [_ _ expr] (hsql/call :month (hx/->timestamp expr)))
 (defmethod sql.qp/date [:hive-like :quarter-of-year] [_ _ expr] (hsql/call :quarter (hx/->timestamp expr)))
@@ -90,18 +90,20 @@
 
 (defmethod sql.qp/date [:hive-like :day-of-week]
   [_ _ expr]
-  (hx/->integer (date-format "u"
-                             (hx/+ (hx/->timestamp expr)
-                                   (hsql/raw "interval '1' day")))))
+  (sql.qp/adjust-day-of-week :hive-like
+                             (hx/->integer (date-format "u"
+                                                        (hx/+ (hx/->timestamp expr)
+                                                              (hsql/raw "interval '1' day"))))))
 
 (defmethod sql.qp/date [:hive-like :week]
   [_ _ expr]
-  (hsql/call :date_sub
-    (hx/+ (hx/->timestamp expr)
-          (hsql/raw "interval '1' day"))
-    (date-format "u"
-                 (hx/+ (hx/->timestamp expr)
-                       (hsql/raw "interval '1' day")))))
+  (let [week-extract-fn (fn [expr]
+                          (hsql/call :date_sub
+                            (hx/+ (hx/->timestamp expr)
+                                  (hsql/raw "interval '1' day"))
+                            (date-format "u" (hx/+ (hx/->timestamp expr)
+                                                   (hsql/raw "interval '1' day")))))]
+    (sql.qp/adjust-start-of-week :hive-like week-extract-fn expr)))
 
 (defmethod sql.qp/date [:hive-like :quarter]
   [_ _ expr]
